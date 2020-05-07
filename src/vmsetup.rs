@@ -67,7 +67,6 @@ impl VMSetup {
 
     /// Sets trace flag to TVM for printing stack and commands
     #[allow(dead_code)]
-    #[cfg(feature = "trace")]
     pub fn set_debug(mut self, enable: bool) -> VMSetup {
         if enable {
             self.vm.set_trace(Engine::TRACE_ALL);

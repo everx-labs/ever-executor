@@ -14,40 +14,32 @@
 
 use crate::{
     blockchain_config::{BlockchainConfig, GasConfigFull, CalcMsgFwdFees}, 
-    error::ExecutorError, vmsetup::VMSetup
+    error::ExecutorError, vmsetup::VMSetup,
+    transaction_executor::TransactionExecutor,
 };
 
 use num_traits::ToPrimitive;
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
     Deserializable, GetRepresentationHash, Serializable,
-    accounts::{Account, AccountState}, config_params::MsgForwardPrices,
-    messages::{
-        AddSub, CommonMsgInfo, CurrencyCollection, InternalMessageHeader, 
-        Message, MsgAddressInt, MsgAddressIntOrNone
-    },
-    out_actions::{
-        OutAction, OutActions, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_VALID_MODES,
-        SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY,
-        SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS
-    },
-    transactions::{
-        AccStatusChange, ComputeSkipReason, Transaction, TrActionPhase, 
-        TrBouncePhase, TrBouncePhaseOk, TrBouncePhaseNofunds, TrComputePhase,
-        TrComputePhaseSkipped, TrComputePhaseVm, TrCreditPhase,
-        TrStoragePhase
-    },
-    types::{Grams, VarUInteger7}
+    Account, AccountState, MsgForwardPrices,
+    AddSub, CommonMsgInfo, CurrencyCollection, InternalMessageHeader, 
+    Message, MsgAddressInt, MsgAddressIntOrNone,
+    OutAction, OutActions, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_VALID_MODES,
+    SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY,
+    SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
+    AccStatusChange, ComputeSkipReason, Transaction, TrActionPhase, 
+    TrBouncePhase, TrBouncePhaseOk, TrBouncePhaseNofunds, TrComputePhase,
+    TrComputePhaseSkipped, TrComputePhaseVm, TrCreditPhase,
+    TrStoragePhase,
+    Grams, VarUInteger7,
 };
 use ton_types::{Cell, error, fail, Result};
 use ton_vm::{
     error::TvmError, executor::gas::gas_state::Gas,
-    smart_contract_info::SmartContractInfo, stack::{Stack, StackItem}
+    smart_contract_info::SmartContractInfo, stack::StackItem
 };
 
-#[cfg(test)]
-#[path = "tests/test_tr_phases.rs"]
-mod tests;
 
 const RESULT_CODE_ACTIONLIST_INVALID: i32 = 32;
 const RESULT_CODE_TOO_MANY_ACTIONS:   i32 = 33;
@@ -74,29 +66,24 @@ pub fn storage_phase(
     tr: &mut Transaction,
     config: &BlockchainConfig,
     is_special: bool
-) -> Option<TrStoragePhase> {    
+) -> Option<TrStoragePhase> {
     log::debug!(target: "executor", "storage_phase");
-    if Account::AccountNone == *acc {
-        return None;
-    }
     let balance = acc.get_balance()?.clone();
 
-    let mut fee = if is_special {
-        Grams::zero()
+    let mut fee;
+    if is_special {
+        fee = Grams::zero()
     } else {
-        let mut fee = acc
+        fee = acc
             .storage_info()
             .and_then(|info| info.due_payment.clone())
             .unwrap_or(Grams::zero());
-        fee.add(
-            &config.calc_storage_fee(
-                acc.storage_info().unwrap(), 
-                acc.get_addr().unwrap(), 
-                tr.now(),
-            ).into()
-        ).unwrap();
-        fee
-    };
+        fee.add(&config.calc_storage_fee(
+            acc.storage_info()?,
+            acc.get_addr()?,
+            tr.now(),
+        ).into()).unwrap();
+    }
 
     if balance.grams >= fee {
         assert_eq!(acc.sub_funds(&CurrencyCollection::from_grams(fee.clone())).unwrap(), true, "all checks have been done");
@@ -154,44 +141,40 @@ pub fn init_gas(acc_balance: u128, msg_balance: u128, is_external: bool, is_spec
 
 /// Implementation of transaction's computing phase.
 /// Evaluates new accout state and invokes TVM if account has contract code.
-pub fn compute_phase<T>(
-    msg: &Message, 
+pub fn compute_phase(
+    msg: Option<&Message>,
     acc: &mut Account, 
     smc_info: &SmartContractInfo, 
-    build_stack: T,
+    stack_builder: &dyn TransactionExecutor,
     config: &GasConfigFull,
     is_special: bool,
-    _debug: bool,                                                                  
-) -> Result<(TrComputePhase, Option<Cell>)>
-where T: Fn(&Message, &Account) -> Stack,
-{
-    let (mut new_acc, mut phase) = compute_new_state(acc.clone(), msg);
+    debug: bool,                                                                  
+) -> Result<(TrComputePhase, Option<Cell>)> {
+    let mut msg_balance = 0;
+    let mut is_external = false;
+    let (mut new_acc, mut phase) = match msg {
+        Some(ref msg) => {
+            msg_balance = msg.get_value().map(|value| value.grams.value())
+                .cloned().unwrap_or_default().to_u128()
+                .ok_or(ExecutorError::TrExecutorError("Failed to convert msg balance to u128".to_string()))?;
+            is_external = msg.is_inbound_external();
+            compute_new_state(acc.clone(), msg)
+        }
+        None => (acc.clone(), TrComputePhase::Vm(TrComputePhaseVm::default()))
+    };
 
     if let TrComputePhase::Skipped(_) = phase {
         return Ok((phase, None));
     }
 
-    let acc_balance = new_acc.get_balance()
-        .unwrap_or(&CurrencyCollection::default())
+    let acc_balance = new_acc.get_balance().cloned().unwrap_or_default()
         .grams.value().to_u128()
-        .ok_or(
-            ExecutorError::TrExecutorError(
-                "Failed to convert account balance to u128".to_string()
-            )
-        )?;
-    let msg_balance = msg.get_value()
-        .unwrap_or(&CurrencyCollection::default())
-        .grams.value().to_u128()
-        .ok_or(
-            ExecutorError::TrExecutorError(
-                "Failed to convert msg balance to u128".to_string()
-            )
-        )?;
-    let is_external = msg.is_inbound_external();
+        .ok_or(ExecutorError::TrExecutorError(
+            "Failed to convert account balance to u128".to_string()))?;
     log::debug!(target: "executor", "acc balance: {}", acc_balance);
     log::debug!(target: "executor", "msg balance: {}", msg_balance);
     //code must present but can be empty (i.g. for uninitialized account)
-    let code = new_acc.get_code().unwrap_or(Cell::default());
+    let code = new_acc.get_code().unwrap_or_default();
 
     let gas = init_gas(acc_balance, msg_balance, is_external, is_special, config);
     let vm_phase = phase.get_vmphase_mut().unwrap();
@@ -203,9 +186,10 @@ where T: Fn(&Message, &Account) -> Stack,
 
     let mut vm = VMSetup::new(code.into())
         .set_contract_info(&smc_info)
-        .set_stack(build_stack(msg, &new_acc))
+        .set_stack(stack_builder.build_stack(msg, &new_acc))
         .set_data(new_acc.get_data().unwrap_or(Cell::default()))
         .set_gas(gas)
+        .set_debug(debug)
         .create();
     
     //TODO: set vm_init_state_hash
@@ -213,9 +197,14 @@ where T: Fn(&Message, &Account) -> Stack,
     match vm.execute() {
         Err(e) => {
             log::debug!(target: "executor", "VM terminated with exception: {}", e);
-            vm_phase.exit_code = match e.downcast::<TvmError>() {
-                Ok(TvmError::TvmExceptionFull(e)) => e.number as i32,
-                _ => -1
+            vm_phase.exit_code = if let Some(TvmError::TvmExceptionFull(e)) = e.downcast_ref() {
+                e.number as i32
+            } else if let Some(TvmError::TvmException(e)) = e.downcast_ref() {
+                *e as i32
+            } else if let Some(e) = e.downcast_ref::<ton_types::types::ExceptionCode>() {
+                *e as i32
+            } else {
+                -1
             };
             vm_phase.success = vm.get_committed_state().is_committed();
         },
@@ -350,13 +339,13 @@ fn compute_account_state(mut acc: Account, in_msg: &Message, bounce: bool) -> (A
             //account is active, just return it
             log::debug!(target: "executor", "account state: AccountActive");
             (acc, phase)
-        },
+        }
         AccountState::AccountUninit => {
             log::debug!(target: "executor", "AccountUninit");
-            if let Some(ref state) = in_msg.state_init() {
+            if let Some(state_init) = in_msg.state_init() {
                 // if msg is a constructor message then
                 // borrow code and data from it and switch account state to 'active'.
-                acc.activate(state.clone());
+                acc.activate(state_init.clone());
                 phase.activated(true);
                 log::debug!(target: "executor", "external message for uninitialized: activated");
                 (acc, phase)
@@ -371,10 +360,7 @@ fn compute_account_state(mut acc: Account, in_msg: &Message, bounce: bool) -> (A
                     //we will not skip computing phase, but invoke TVM as if
                     //the code of the smart contract was empty 
                     //(i.e., consisting of an implicit RET)
-                    log::debug!(
-                        target: "executor", 
-                        "account is uninitialized, but we can send grams to it"
-                    );
+                    log::debug!(target: "executor", "account is uninitialized, but we can send grams to it");
                     (acc, phase)
                 } else {
                     //external message for uninitialized account,
@@ -386,29 +372,26 @@ fn compute_account_state(mut acc: Account, in_msg: &Message, bounce: bool) -> (A
                     (acc, skipped_phase_no_state)
                 }
             }
-        },
+        }
         AccountState::AccountFrozen(_) => {
             log::debug!(target: "executor", "AccountFrozen");
             //account balance was credited and if it positive after that
             //and inbound message bear code and data then make some check and unfreeze account
-            if !acc.get_balance().unwrap().grams.is_zero()
-                && in_msg.state_init().is_some() {
-                log::debug!(target: "executor", "external message for frozen: activated");
-                acc.activate(in_msg.state_init().as_ref().unwrap().clone());
-                phase.activated(true);
-                (acc, phase)
-            } else {
-                //skip computing phase, because account is frozen (bad state)
-                log::debug!(
-                    target: "executor", 
-                    "account is frozen (bad state): skip computing phase"
-                );
-                phase = TrComputePhase::Skipped(
-                    TrComputePhaseSkipped { reason: ComputeSkipReason::BadState }
-                );
-                (acc.clone(), phase)
+            if !acc.get_balance().unwrap().grams.is_zero() {
+                if let Some(state_init) = in_msg.state_init() {
+                    log::debug!(target: "executor", "external message for frozen: activated");
+                    acc.activate(state_init.clone());
+                    phase.activated(true);
+                    return (acc, phase)
+                }
             }
-        },
+            //skip computing phase, because account is frozen (bad state)
+            log::debug!(target: "executor", "account is frozen (bad state): skip computing phase");
+            phase = TrComputePhase::Skipped(
+                TrComputePhaseSkipped { reason: ComputeSkipReason::BadState }
+            );
+            (acc, phase)
+        }
     }
 }
 
@@ -441,6 +424,7 @@ pub fn action_phase(
     acc: &mut Account,
     actions_cell: Option<Cell>,
     config: &BlockchainConfig,
+    lt: Arc<AtomicU64>,
     is_special: bool,
 ) -> Option<TrActionPhase> {
     let mut phase = TrActionPhase::default();
@@ -459,8 +443,6 @@ pub fn action_phase(
     phase.result_arg = None;
     phase.valid = true;
     phase.success = true;
-
-    let mut next_lt = tr.logical_time() + 1;
 
     let actions_cell = actions_cell.unwrap_or_default();
     if let Err(err) = actions.read_from(&mut actions_cell.into()) {
@@ -495,7 +477,7 @@ pub fn action_phase(
                     acc.get_addr().unwrap().clone(), 
                     mode, 
                     Arc::make_mut(&mut out_msg),
-                    next_lt,
+                    lt.fetch_add(1, Ordering::SeqCst),
                     tr.now(),
                     &mut remaining_balance,
                     config,
@@ -504,7 +486,6 @@ pub fn action_phase(
                 match result {
                     Ok(msg_balance) => {
                         msg_action_count += 1;
-                        next_lt += 1;
                         out_msgs.push(out_msg);
                         total_spend_value.add(&msg_balance).ok()
                             .map_or(RESULT_CODE_INVALID_BALANCE, |_| 0)

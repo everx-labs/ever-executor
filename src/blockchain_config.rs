@@ -12,13 +12,13 @@
 * limitations under the License.
 */
 
-use crate::error::ExecutorError;
-use ton_types::{BuilderData, error, Result};
 use ton_block::{
-    AccountId, ConfigParam18, ConfigParamEnum, ConfigParams, FundamentalSmcAddresses, 
+    ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
     GasFlatPfx, GasLimitsPrices, GasPrices, GasPricesEx, Message, MsgAddressInt, 
-    MsgForwardPrices, Serializable, StorageInfo, StoragePrices, StorageUsedShort
+    MsgForwardPrices, Serializable, StorageInfo, StoragePrices, StorageUsedShort,
+    MASTERCHAIN_ID
 };
+use ton_types::{AccountId, BuilderData, Result};
 
 pub trait TONDefaultConfig {
     /// Get default value for masterchain
@@ -100,6 +100,7 @@ impl CalcMsgFwdFees for MsgForwardPrices{
     }
 }
 
+#[derive(Clone)]
 pub struct AccStoragePrices {
     prices: Vec<StoragePrices>
 }
@@ -162,7 +163,7 @@ impl AccStoragePrices {
 }
 
 /// Gas parameters
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GasConfigFull {
     gas_price: u64,
     pub gas_limit: u64,
@@ -280,6 +281,7 @@ impl GasConfigFull {
 }
 
 /// Blockchain configuration parameters
+#[derive(Clone)]
 pub struct BlockchainConfig {
     gas_prices_mc: GasConfigFull,
     gas_prices_wc: GasConfigFull,
@@ -324,28 +326,7 @@ impl Default for MsgFees {
     }
 }
 
-macro_rules! read_config {
-    ( $config:expr, $index:expr, $cpname:ident ) => {
-        {
-            let c = $config.config($index)?
-                .ok_or(ExecutorError::TrExecutorError(format!("No config {}", $index)))?;
-            match c {
-                ConfigParamEnum::$cpname(value) => Ok(value),
-                _ => Err(
-                    error!(
-                        ExecutorError::TrExecutorError(
-                            "Invalid config param returned".to_string()
-                        )
-                    )
-                )
-            }
-        }
-    }
-}
-
 impl BlockchainConfig {
-    pub const MASTERCHAIN_ID: i32 = -1;
-
     fn get_default_special_contracts() -> FundamentalSmcAddresses {
         let mut map = FundamentalSmcAddresses::default();
         map.add_key(&AccountId::from([0x33u8; 32])).unwrap();
@@ -365,15 +346,15 @@ impl BlockchainConfig {
     /// Create `BlockchainConfig` struct with `ConfigParams` taken from blockchain
     pub fn with_config(config: ConfigParams) -> Result<Self> {
         Ok(BlockchainConfig {
-            gas_prices_mc: (&read_config!(config, 20, ConfigParam20)?).into(),
-            gas_prices_wc: (&read_config!(config, 21, ConfigParam20)?).into(),
+            gas_prices_mc: GasConfigFull::from(&config.gas_prices(true)?),
+            gas_prices_wc: GasConfigFull::from(&config.gas_prices(false)?),
 
-            fwd_prices_mc: read_config!(config, 24, ConfigParam24)?,
-            fwd_prices_wc: read_config!(config, 25, ConfigParam25)?,
+            fwd_prices_mc: config.fwd_prices(true)?,
+            fwd_prices_wc: config.fwd_prices(false)?,
             
-            storage_prices: AccStoragePrices::with_config(&read_config!(config, 18, ConfigParam18)?)?,
+            storage_prices: AccStoragePrices::with_config(&config.storage_prices()?)?,
 
-            special_contracts: read_config!(config, 31, ConfigParam31)?.fundamental_smc_addr,
+            special_contracts: config.fundamental_smc_addr()?,
 
             raw_config: config,
         })
@@ -381,8 +362,8 @@ impl BlockchainConfig {
 
     /// Get `MsgForwardPrices` for message forward fee calculation
     pub fn get_fwd_prices(&self, msg: &Message) -> &MsgForwardPrices {
-        if  Some(Self::MASTERCHAIN_ID) == msg.workchain_id() ||
-            Some(Self::MASTERCHAIN_ID) == msg.src_workchain_id()
+        if  Some(MASTERCHAIN_ID) == msg.workchain_id() ||
+            Some(MASTERCHAIN_ID) == msg.src_workchain_id()
         {
             &self.fwd_prices_mc
         } else {
@@ -411,7 +392,7 @@ impl BlockchainConfig {
             u128::from(storage.used.bits.0),
             storage.last_paid,
             now,
-            address.get_workchain_id() == Self::MASTERCHAIN_ID)
+            address.get_workchain_id() == MASTERCHAIN_ID)
     }
 
     /// Check if account is special TON account
@@ -432,6 +413,6 @@ impl BlockchainConfig {
 
     /// Check if address belongs to masterchain
     pub fn is_masterchain_address(address: &MsgAddressInt) -> bool {
-        address.get_workchain_id() == Self::MASTERCHAIN_ID
+        address.get_workchain_id() == MASTERCHAIN_ID
     }
 }

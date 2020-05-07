@@ -17,6 +17,12 @@
 pub mod transaction_executor;
 pub use transaction_executor::*;
 
+pub mod ordinary_transaction;
+pub use ordinary_transaction::OrdinaryTransactionExecutor;
+
+pub mod tick_tock_transaction;
+pub use tick_tock_transaction::TickTockTransactionExecutor;
+
 pub mod tr_phases;
 pub use tr_phases::*;
 
