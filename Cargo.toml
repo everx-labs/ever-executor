@@ -24,9 +24,9 @@ version = "0.21.120"
 clear_on_drop = { version = "0.2", features = ["no_cc"] }
 
 [dependencies]
-ton_block = { path = "/tonlabs/ton-labs-block" }
-ton_vm = { path = "/tonlabs/ton-labs-vm", default-features = false }
-ton_types = { path = "/tonlabs/ton-labs-types" }
+ton_block = { git = "https://github.com/tonlabs/ton-labs-block" }
+ton_vm = { git = "https://github.com/tonlabs/ton-labs-vm", default-features = false }
+ton_types = { git = "https://github.com/tonlabs/ton-labs-types" }
 
 # External
 log = "0.4.8"
