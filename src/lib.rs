@@ -22,9 +22,6 @@ pub use ordinary_transaction::OrdinaryTransactionExecutor;
 pub mod tick_tock_transaction;
 pub use tick_tock_transaction::TickTockTransactionExecutor;
 
-pub mod tr_phases;
-pub use tr_phases::*;
-
 #[macro_use]
 pub mod error;
 pub use error::*;

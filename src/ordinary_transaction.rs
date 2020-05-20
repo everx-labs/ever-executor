@@ -15,7 +15,6 @@
 use crate::{
     blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError,
     TransactionExecutor,
-    tr_phases::{compute_phase, bounce_phase, credit_phase, storage_phase, action_phase},
 };
 
 use std::{sync::{atomic::{AtomicU64, Ordering}, Arc}};
@@ -117,14 +116,14 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         }
 
         if credit_first {
-            description.credit_ph = credit_phase(&in_msg, &mut account);
+            description.credit_ph = self.credit_phase(&in_msg, &mut account);
         }
-        description.storage_ph = storage_phase(&mut account, &mut tr, &self.config, is_special);
+        description.storage_ph = self.storage_phase(&mut account, &mut tr, &self.config, is_special);
         log::debug!(target: "executor",
             "storage_phase: {}", if description.storage_ph.is_some() {"present"} else {"none"});
 
         if !credit_first {
-            description.credit_ph = credit_phase(&in_msg, &mut account);
+            description.credit_ph = self.credit_phase(&in_msg, &mut account);
         }
         log::debug!(target: "executor", 
             "credit_phase: {}", if description.credit_ph.is_some() {"present"} else {"none"});
@@ -135,9 +134,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             now = Instant::now();
         }
 
-        let smci = self.build_contract_info(&account, &account_address, block_unixtime, block_lt, lt); 
+        let smci = self.build_contract_info(self.config.raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
         log::debug!(target: "executor", "compute_phase");
-        let (compute_ph, actions) = compute_phase(
+        let (compute_ph, actions) = self.compute_phase(
             Some(&in_msg), 
             &mut account, 
             &smci,
@@ -153,7 +152,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase");
-                    action_phase(&mut tr, &mut account, actions, &self.config, last_tr_lt.clone(), is_special)
+                    self.action_phase(&mut tr, &mut account, actions, &self.config, last_tr_lt.clone(), is_special)
                 } else {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
                     None
@@ -182,12 +181,12 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         };
         
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
-        account.set_last_tr_time(lt);
+        account.set_last_tr_time(lt + 1);
 
         if description.aborted {
             log::debug!(target: "executor", "bounce_phase");
             let fwd_prices = self.config.get_fwd_prices(&in_msg);
-            description.bounce = bounce_phase(in_msg.clone(), &mut account, &mut tr, 0, fwd_prices);
+            description.bounce = self.bounce_phase(in_msg.clone(), &mut account, &mut tr, 0, fwd_prices);
         } else {
             tr.set_end_status(account.status());
             *account_root = account.write_to_new_cell()?.into();
@@ -204,6 +203,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         Ok(tr)
     }
+    fn ordinary_transaction(&self) -> bool { true }
+    fn config(&self) -> &BlockchainConfig { &self.config }
     fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Stack {
         let in_msg = in_msg.unwrap();
         let account_balance = int!(account.get_balance().unwrap().grams.0.clone());

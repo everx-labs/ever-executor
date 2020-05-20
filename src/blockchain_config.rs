@@ -11,6 +11,7 @@
 * limitations under the License.
 */
 
+use std::ops::Deref;
 use ton_block::{
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
     GasFlatPfx, GasLimitsPrices, GasPrices, GasPricesEx, Message, MsgAddressInt, 
@@ -173,6 +174,7 @@ pub struct GasConfigFull {
     pub special_gas_limit: u64,
     pub flat_gas_limit: u64,
     pub flat_gas_price: u64,
+    max_gas_threshold: u128,
 }
 
 impl TONDefaultConfig for GasConfigFull {
@@ -187,6 +189,7 @@ impl TONDefaultConfig for GasConfigFull {
             block_gas_limit: 10000000,
             freeze_due_limit: 100000000,
             delete_due_limit:1000000000,
+            max_gas_threshold:1000000,
         }
     }
 
@@ -201,6 +204,7 @@ impl TONDefaultConfig for GasConfigFull {
             block_gas_limit: 10000000,
             freeze_due_limit: 100000000,
             delete_due_limit:1000000000,
+            max_gas_threshold:1000000,
         }
     }
 }
@@ -218,6 +222,7 @@ impl From<&GasPrices> for GasConfigFull {
             delete_due_limit: prices.delete_due_limit,
             flat_gas_limit: 0,
             flat_gas_price: 0,
+            max_gas_threshold: 0,
         }
     }
 }
@@ -234,26 +239,32 @@ impl From<&GasPricesEx> for GasConfigFull {
             delete_due_limit: prices.delete_due_limit,
             flat_gas_limit: 0,
             flat_gas_price: 0,
+            max_gas_threshold: 0,
         }
     }
 }
 
 impl From<&GasFlatPfx> for GasConfigFull {
     fn from(prices: &GasFlatPfx) -> Self {
-        let mut full = GasConfigFull::from(&*prices.other);
+        let mut full = GasConfigFull::from(prices.other.deref());
         full.flat_gas_limit = prices.flat_gas_limit;
         full.flat_gas_price = prices.flat_gas_price;
+        full.max_gas_threshold = full.flat_gas_price as u128;
         full
     }
 }
 
 impl From<&GasLimitsPrices> for GasConfigFull {
     fn from(prices: &GasLimitsPrices) -> Self {
-        match prices {
+        let mut full: GasConfigFull = match prices {
             GasLimitsPrices::Std(prices) => prices.into(),
             GasLimitsPrices::Ex(prices) => prices.into(),
             GasLimitsPrices::FlatPfx(prices) => prices.into(),
+        };
+        if full.gas_limit > full.flat_gas_limit {
+            full.max_gas_threshold += (full.gas_price as u128) * ((full.gas_limit - full.flat_gas_limit) as u128) >> 16;
         }
+        full
     }
 }
 
@@ -276,6 +287,18 @@ impl GasConfigFull {
     /// Get gas price in nanograms
     pub fn get_real_gas_price(&self) -> u64 {
         self.gas_price >> 16
+    }
+
+    /// Calculate gas by grams balance
+    pub fn calc_gas(&self, value: u128) -> u64 {
+        if value >= self.max_gas_threshold {
+            return self.gas_limit
+        }
+        if value < self.flat_gas_price as u128 {
+            return 0
+        }
+        let res = (value - self.flat_gas_price as u128) << 16 / self.gas_price as u128;
+        self.flat_gas_limit + res as u64
     }
 }
 
@@ -413,5 +436,9 @@ impl BlockchainConfig {
     /// Check if address belongs to masterchain
     pub fn is_masterchain_address(address: &MsgAddressInt) -> bool {
         address.get_workchain_id() == MASTERCHAIN_ID
+    }
+
+    pub fn raw_config(&self) -> &ConfigParams {
+        &self.raw_config
     }
 }
