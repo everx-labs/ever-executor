@@ -93,9 +93,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 "Account = None, msg address = {:x}", in_msg.int_dst_account_id().unwrap_or_default())
         }
 
-        // TODO: maybe fail if special or check tick tock only
         let is_special = self.config.is_special_account(account_address)?;
-
         let lt = last_tr_lt.fetch_add(1, Ordering::SeqCst);
         let mut tr = Transaction::with_account_and_message(&account, &in_msg, lt)?;
         tr.set_now(block_unixtime);
@@ -109,8 +107,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             let (_, in_fwd_fee) = self.config.get_fwd_prices(&in_msg).calc_fwd_fee(&in_msg)?;
             let in_fwd_fee = CurrencyCollection::with_grams(in_fwd_fee as u64);
             if !account.sub_funds(&in_fwd_fee)? {
-                fail!(ExecutorError::TrExecutorError(
-                    "Cannot pay for importing this external message".to_string()))
+                fail!(ExecutorError::NoFundsToImportMsg)
             }
             tr.set_total_fees(in_fwd_fee);
         }

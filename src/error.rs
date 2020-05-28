@@ -20,5 +20,9 @@ pub enum ExecutorError {
     #[fail(display = "Transaction executor internal error: {}", 0)]
     TrExecutorError(String),
     #[fail(display = "VM Exception, code: {}", 0)]
-    TvmExceptionCode(ExceptionCode)
+    TvmExceptionCode(ExceptionCode),
+    #[fail(display = "Contract did not accept message, exit code: {}", 0)]
+    NoAcceptError(i32),
+    #[fail(display = "Cannot pay for importing this external message")]
+    NoFundsToImportMsg
 }

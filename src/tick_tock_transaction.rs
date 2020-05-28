@@ -74,16 +74,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let account_address = account.get_addr().cloned().unwrap_or_default();
         log::debug!(target: "executor", "tick tock transation account {}", account_id.to_hex_string());
         let is_special = true;
-        let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
         let lt = last_tr_lt.load(Ordering::SeqCst);
+        let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
         tr.set_logical_time(lt);
         tr.set_now(block_unixtime);
-
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();
-
-        // TODO: add and process ihr_delivered parameter (if ihr_delivered ihr_fee is added to total fees)
-        // TODO: add msg_balance_remaining variable and use it in phases 
 
         description.storage = match self.storage_phase(&mut account, &mut tr, &self.config, is_special) {
             Some(storage_ph) => storage_ph,
@@ -126,11 +122,11 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 log::debug!(target: "executor", 
                     "action_phase: present: success={}, err_code={}", phase.success, phase.result_code);
                 !phase.success
-            },
+            }
             None => {
                 log::debug!(target: "executor", "action_phase: none");
                 true
-            },
+            }
         };
         
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);

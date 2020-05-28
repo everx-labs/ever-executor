@@ -33,7 +33,7 @@ use ton_block::{
 };
 use ton_types::{error, fail, Cell, Result, HashmapType};
 use ton_vm::{
-    error::TvmError, executor::gas::gas_state::Gas,
+    error::tvm_exception_code_and_value, executor::gas::gas_state::Gas,
     smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem},
 };
@@ -206,26 +206,19 @@ pub trait TransactionExecutor {
         
         //TODO: set vm_init_state_hash
 
-        match vm.execute() {
-            Err(e) => {
-                log::debug!(target: "executor", "VM terminated with exception: {}", e);
-                vm_phase.exit_code = if let Some(TvmError::TvmExceptionFull(e)) = e.downcast_ref() {
-                    e.number as i32
-                } else if let Some(TvmError::TvmException(e)) = e.downcast_ref() {
-                    *e as i32
-                } else if let Some(e) = e.downcast_ref::<ton_types::types::ExceptionCode>() {
-                    *e as i32
-                } else {
-                    -1
-                };
-                vm_phase.success = vm.get_committed_state().is_committed();
-            },
+        let result = vm.execute();
+        log::trace!(target: "executor", "execute result: {:?}", result);
+        match result {
+            Err(err) => {
+                log::debug!(target: "executor", "VM terminated with exception: {}", err);
+                vm_phase.exit_code = tvm_exception_code_and_value(&err).0;
+            }
             Ok(exit_code) => {
                 //TODO: implement VM exit_code() method 
                 vm_phase.exit_code = exit_code;
-                vm_phase.success = vm.get_committed_state().is_committed();
-            },
+            }
         };
+        vm_phase.success = vm.get_committed_state().is_committed();
         log::debug!(target: "executor", "VM terminated with exit code {}", vm_phase.exit_code);
 
         // calc gas fees
@@ -236,11 +229,7 @@ pub trait TransactionExecutor {
         vm_phase.gas_used = used.into();
         if credit != 0 {
             if is_external {
-                fail!(
-                    ExecutorError::TrExecutorError( 
-                        "Contract did not accepted on external message processing".to_string()
-                    )
-                )
+                fail!(ExecutorError::NoAcceptError(vm_phase.exit_code))
             }
             vm_phase.gas_fees = Grams::zero();
         } else { // credit == 0 means contract accepted
@@ -263,26 +252,24 @@ pub trait TransactionExecutor {
         //exact gass from account balance, balance cannot be less than gas_fees.
         new_acc.sub_funds(&CurrencyCollection::from_grams(gas_fees)).unwrap();
         
-        match vm.get_committed_state().get_root() {
-            StackItem::Cell(cell) => if is_ordinary {
+        if is_ordinary {
+            if let StackItem::Cell(cell) = vm.get_committed_state().get_root() {
                 new_acc.set_data(cell);
-            }
-            _ => {
+            } else {
                 log::debug!(target: "executor", "invalid contract, it must be cell in c4 register");
                 vm_phase.success = false;
             }
         }
         *acc = new_acc;
 
-        let out_actions = match vm.get_committed_state().get_actions() {
-            StackItem::Cell(root_cell) => Some(root_cell),
-            _ => {
-                log::debug!(target: "executor", "invalid contract, it must be cell in c5 register");
-                vm_phase.success = false;
-                None
-            },
+        let out_actions = if let StackItem::Cell(root_cell) = vm.get_committed_state().get_actions() {
+            Some(root_cell)
+        } else {
+            log::debug!(target: "executor", "invalid contract, it must be cell in c5 register");
+            vm_phase.success = false;
+            None
         };
-        
+
         Ok((phase, out_actions))
     }
 
