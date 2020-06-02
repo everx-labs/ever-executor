@@ -31,6 +31,9 @@ use ton_vm::{
     int, stack::{Stack, StackItem, integer::IntegerData}
 };
 
+#[cfg(test)]
+#[path = "tests/test_ordinary_transaction.rs"]
+mod tests;
 
 pub struct OrdinaryTransactionExecutor {
     config: BlockchainConfig,

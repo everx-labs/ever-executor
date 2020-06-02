@@ -297,7 +297,7 @@ impl GasConfigFull {
         if value < self.flat_gas_price as u128 {
             return 0
         }
-        let res = (value - self.flat_gas_price as u128) << 16 / self.gas_price as u128;
+        let res = ((value - self.flat_gas_price as u128) << 16) / (self.gas_price as u128);
         self.flat_gas_limit + res as u64
     }
 }
