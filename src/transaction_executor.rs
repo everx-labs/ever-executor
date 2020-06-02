@@ -54,13 +54,7 @@ const MAX_ACTIONS: usize = 255;
 
 pub const MINIMAL_FEE: u64 = 1; //1 nanogram
 
-#[cfg(test)]
-#[path = "tests/test_tr_phases.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/test_transaction_executor_with_real_data.rs"]
-mod tests_with_real_data;
 
 pub trait TransactionExecutor {
     fn execute(
