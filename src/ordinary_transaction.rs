@@ -26,7 +26,7 @@ use ton_block::{
     messages::{CommonMsgInfo, Message},
     HashUpdate, Serializable, Deserializable, Transaction, TrComputePhase, TransactionDescrOrdinary, TransactionDescr,
 };
-use ton_types::{Cell, error, fail, Result};
+use ton_types::{Cell, error, fail, Result, HashmapE};
 use ton_vm::{
     int, stack::{Stack, StackItem, integer::IntegerData}
 };
@@ -58,10 +58,11 @@ impl OrdinaryTransactionExecutor {
 impl TransactionExecutor for OrdinaryTransactionExecutor {
     ///
     /// Create end execute transaction from message for account
-    fn execute(
+    fn execute_with_libs(
         &self,
         in_msg: Option<&Message>,
         account_root: &mut Cell,
+        state_libs: HashmapE, // masterchain libraries
         block_unixtime: u32,
         block_lt: u64,
         last_tr_lt: Arc<AtomicU64>,
@@ -83,10 +84,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             CommonMsgInfo::ExtInMsgInfo(_) => (true, true)
         };
 
-        let old_hash = account_root.repr_hash();
         let mut account = Account::construct_from(&mut account_root.clone().into())?;
-        let account_address = &in_msg.dst().ok_or(ExecutorError::TrExecutorError(
-            "Input message has no dst address".to_string()))?;
+
+        let old_hash = account_root.repr_hash();
+        let account_address = &in_msg.dst()
+            .ok_or_else(|| ExecutorError::TrExecutorError("Input message has no dst address".to_string()))?;
         match account.get_id() {
             Some(account_id) => log::debug!(target: "executor", "Account = {:x}", account_id),
             None => log::debug!(target: "executor",
@@ -135,13 +137,15 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         log::debug!(target: "executor", "compute_phase");
         let (compute_ph, actions) = self.compute_phase(
             Some(&in_msg), 
-            &mut account, 
+            &mut account,
+            state_libs,
             &smci,
             self,
             self.config.get_gas_config(account_address),
             is_special,
             debug
         )?;
+        let old_account = account.clone();
         description.compute_ph = compute_ph;
         description.action = match description.compute_ph {
             TrComputePhase::Vm(ref phase) => {
@@ -178,21 +182,18 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         };
         
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
-        account.set_last_tr_time(lt + 1);
-
+        tr.set_end_status(account.status());
         if description.aborted {
             log::debug!(target: "executor", "bounce_phase");
+            account = old_account;
             let fwd_prices = self.config.get_fwd_prices(&in_msg);
             description.bounce = self.bounce_phase(in_msg.clone(), &mut account, &mut tr, 0, fwd_prices);
-        } else {
-            tr.set_end_status(account.status());
-            *account_root = account.write_to_new_cell()?.into();
-
-            // calculate Hash update
-            log::debug!(target: "executor", "calculate Hash update");
-            let new_hash = account_root.repr_hash();
-            tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
         }
+        log::debug!(target: "executor", "calculate Hash update");
+        account.set_last_tr_time(lt + 1);
+        *account_root = account.write_to_new_cell()?.into();
+        let new_hash = account_root.repr_hash();
+        tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
         tr.write_description(&TransactionDescr::Ordinary(description))?;
 
         #[cfg(feature="timings")]

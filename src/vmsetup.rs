@@ -11,7 +11,7 @@
 * limitations under the License.
 */
 
-use ton_types::{Cell, SliceData};
+use ton_types::{Cell, HashmapE, SliceData};
 use ton_vm::{
     executor::{Engine, gas::gas_state::Gas}, smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem, savelist::SaveList}
@@ -25,6 +25,7 @@ pub struct VMSetup {
     ctrls: SaveList,
     stack: Option<Stack>,
     gas: Option<Gas>,
+    libraries: Vec<HashmapE>
 }
 
 impl VMSetup {
@@ -37,6 +38,7 @@ impl VMSetup {
             ctrls: SaveList::new(),
             stack: None,
             gas: Some(Gas::empty()),
+            libraries: vec![],
         }
     }
 
@@ -64,6 +66,12 @@ impl VMSetup {
         self
     }
 
+    /// Sets libraries for TVM
+    pub fn set_libraries(mut self, libraries: Vec<HashmapE>) -> VMSetup {
+        self.libraries = libraries;
+        self
+    }
+
     /// Sets trace flag to TVM for printing stack and commands
     #[allow(dead_code)]
     pub fn set_debug(mut self, enable: bool) -> VMSetup {
@@ -77,6 +85,6 @@ impl VMSetup {
 
     /// Creates new instance of TVM with defined stack, registers and code.
     pub fn create(self) -> Engine {
-        self.vm.setup(self.code, Some(self.ctrls), self.stack, self.gas)
+        self.vm.setup_with_libraries(self.code, Some(self.ctrls), self.stack, self.gas, self.libraries)
     }
 }
