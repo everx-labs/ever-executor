@@ -1,0 +1,18 @@
+ARG TON_TYPES=tonlabs/ton-types:latest
+ARG TON_BLOCK=tonlabs/ton-block:latest
+ARG TON_VM=tonlabs/ton-vm:latest
+ARG TON_EXECUTOR
+
+FROM $TON_TYPES as ton-types
+FROM $TON_BLOCK as ton-block
+FROM $TON_VM as ton-vm
+FROM $TON_EXECUTOR as ton-executor
+FROM rust:latest as build
+RUN groupadd --gid 1000 jenkins;\
+    useradd -g jenkins jenkins;
+COPY --from=ton-types    --chown=jenkins:jenkins /tonlabs/ton-types    /tonlabs/ton-types
+COPY --from=ton-block    --chown=jenkins:jenkins /tonlabs/ton-block    /tonlabs/ton-block
+COPY --from=ton-vm       --chown=jenkins:jenkins /tonlabs/ton-vm       /tonlabs/ton-vm
+COPY --from=ton-executor --chown=jenkins:jenkins /tonlabs/ton-executor /tonlabs/ton-executor
+WORKDIR /tonlabs/ton-executor
+VOLUME ["/tonlabs/ton-executor"]

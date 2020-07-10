@@ -23,7 +23,7 @@ use ton_block::{
     Account, Serializable, Deserializable, Message,
     HashUpdate, Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr
 };
-use ton_types::{fail, Cell, Result};
+use ton_types::{fail, Cell, HashmapE, Result};
 use ton_vm::{
     int, boolean, stack::{Stack, StackItem, integer::IntegerData}
 };
@@ -46,10 +46,11 @@ impl TickTockTransactionExecutor {
 impl TransactionExecutor for TickTockTransactionExecutor {
     ///
     /// Create end execute tick or tock transaction for special account
-    fn execute(
+    fn execute_with_libs(
         &self,
         in_msg: Option<&Message>,
         account_root: &mut Cell, // serialized Account
+        state_libs: HashmapE, // masterchain libraries
         block_unixtime: u32,
         block_lt: u64,
         last_tr_lt: Arc<AtomicU64>,
@@ -59,6 +60,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             fail!("Tick Tock transaction must not have input message")
         }
         let mut account = Account::construct_from(&mut account_root.clone().into())?;
+
         let account_id = match account.get_id() {
             Some(addr) => addr,
             None => fail!("Tick Tock contract should have Standard address")
@@ -74,7 +76,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let account_address = account.get_addr().cloned().unwrap_or_default();
         log::debug!(target: "executor", "tick tock transation account {}", account_id.to_hex_string());
         let is_special = true;
-        let lt = last_tr_lt.load(Ordering::SeqCst);
+        let lt = last_tr_lt.fetch_add(1, Ordering::SeqCst);
         let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
         tr.set_logical_time(lt);
         tr.set_now(block_unixtime);
@@ -85,12 +87,14 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             Some(storage_ph) => storage_ph,
             None => fail!("Problem with storage phase")
         };
+        let old_account = account.clone();
 
         log::debug!(target: "executor", "compute_phase {}", lt);
         let smci = self.build_contract_info(self.config.raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
         let (compute_ph, actions) = self.compute_phase(
             None, 
-            &mut account, 
+            &mut account,
+            state_libs,
             &smci, 
             self,
             &self.config.get_gas_config(&account_address),
@@ -130,16 +134,15 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         };
         
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
+        tr.set_end_status(account.status());
+        if description.aborted {
+            account = old_account;
+        }
+        log::debug!(target: "executor", "calculate Hash update");
         account.set_last_tr_time(lt + 1);
         *account_root = account.write_to_new_cell()?.into();
-        // calculate Hash update
-        log::debug!(target: "executor", "calculate Hash update");
         let new_hash = account_root.repr_hash();
         tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
-
-        if !description.aborted {
-            tr.set_end_status(account.status());
-        }
         tr.write_description(&TransactionDescr::TickTock(description))?;
 
         Ok(tr)

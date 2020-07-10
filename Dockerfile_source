@@ -1,0 +1,10 @@
+FROM alpine:latest as ton-executor-src
+RUN addgroup --gid 1000 jenkins && \
+    adduser -D -G jenkins jenkins
+COPY --chown=jenkins:jenkins ./Cargo.* ./*.md ./*.rs /tonlabs/ton-executor/
+COPY --chown=jenkins:jenkins ./src /tonlabs/ton-executor/src
+WORKDIR /tonlabs/ton-executor
+RUN cp Cargo.toml Cargo.bak;\
+    sed -i -E 's/git *= *"(https|ssh):\/\/(git@)?github.com\/tonlabs\/([a-zA-Z\-]*)(\.git)?"/path = "\/tonlabs\/\3"/g' Cargo.toml;
+USER jenkins
+VOLUME ["/tonlabs/ton-executor"]

@@ -13,7 +13,7 @@
 
 use ton_types::types::ExceptionCode;
 
-#[derive(Debug, failure::Fail)]
+#[derive(Debug, failure::Fail, Eq, PartialEq)]
 pub enum ExecutorError {   
     #[fail(display = "Invalid external message")]
     InvalidExtMessage,

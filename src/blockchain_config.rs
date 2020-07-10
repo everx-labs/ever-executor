@@ -11,10 +11,9 @@
 * limitations under the License.
 */
 
-use std::ops::Deref;
 use ton_block::{
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
-    GasFlatPfx, GasLimitsPrices, GasPrices, GasPricesEx, Message, MsgAddressInt, 
+    GasLimitsPrices, Message, MsgAddressInt, 
     MsgForwardPrices, Serializable, StorageInfo, StoragePrices, StorageUsedShort,
     MASTERCHAIN_ID
 };
@@ -162,24 +161,9 @@ impl AccStoragePrices {
     }
 }
 
-/// Gas parameters
-#[derive(Debug, Clone)]
-pub struct GasConfigFull {
-    gas_price: u64,
-    pub gas_limit: u64,
-    pub gas_credit: u64,
-    pub block_gas_limit: u64,
-    pub freeze_due_limit: u64,
-    pub delete_due_limit: u64,
-    pub special_gas_limit: u64,
-    pub flat_gas_limit: u64,
-    pub flat_gas_price: u64,
-    max_gas_threshold: u128,
-}
-
-impl TONDefaultConfig for GasConfigFull {
+impl TONDefaultConfig for GasLimitsPrices {
     fn default_mc() -> Self {
-        GasConfigFull {
+        GasLimitsPrices {
             gas_price: 655360000,
             flat_gas_limit: 100,
             flat_gas_price: 1000000,
@@ -194,7 +178,7 @@ impl TONDefaultConfig for GasConfigFull {
     }
 
     fn default_wc() -> Self {
-        GasConfigFull {
+        GasLimitsPrices {
             gas_price: 65536000,
             flat_gas_limit: 100,
             flat_gas_price: 100000,
@@ -209,104 +193,11 @@ impl TONDefaultConfig for GasConfigFull {
     }
 }
 
-impl From<&GasPrices> for GasConfigFull {
-    fn from(prices: &GasPrices) -> Self {
-        GasConfigFull {
-            gas_price: prices.gas_price,
-            gas_limit: prices.gas_limit,
-            // special_gas_limit is equal gas_limit
-            special_gas_limit: prices.gas_limit,
-            gas_credit: prices.gas_credit,
-            block_gas_limit: prices.block_gas_limit,
-            freeze_due_limit: prices.freeze_due_limit,
-            delete_due_limit: prices.delete_due_limit,
-            flat_gas_limit: 0,
-            flat_gas_price: 0,
-            max_gas_threshold: 0,
-        }
-    }
-}
-
-impl From<&GasPricesEx> for GasConfigFull {
-    fn from(prices: &GasPricesEx) -> Self {
-        GasConfigFull {
-            gas_price: prices.gas_price,
-            gas_limit: prices.gas_limit,
-            special_gas_limit: prices.special_gas_limit,
-            gas_credit: prices.gas_credit,
-            block_gas_limit: prices.block_gas_limit,
-            freeze_due_limit: prices.freeze_due_limit,
-            delete_due_limit: prices.delete_due_limit,
-            flat_gas_limit: 0,
-            flat_gas_price: 0,
-            max_gas_threshold: 0,
-        }
-    }
-}
-
-impl From<&GasFlatPfx> for GasConfigFull {
-    fn from(prices: &GasFlatPfx) -> Self {
-        let mut full = GasConfigFull::from(prices.other.deref());
-        full.flat_gas_limit = prices.flat_gas_limit;
-        full.flat_gas_price = prices.flat_gas_price;
-        full.max_gas_threshold = full.flat_gas_price as u128;
-        full
-    }
-}
-
-impl From<&GasLimitsPrices> for GasConfigFull {
-    fn from(prices: &GasLimitsPrices) -> Self {
-        let mut full: GasConfigFull = match prices {
-            GasLimitsPrices::Std(prices) => prices.into(),
-            GasLimitsPrices::Ex(prices) => prices.into(),
-            GasLimitsPrices::FlatPfx(prices) => prices.into(),
-        };
-        if full.gas_limit > full.flat_gas_limit {
-            full.max_gas_threshold += (full.gas_price as u128) * ((full.gas_limit - full.flat_gas_limit) as u128) >> 16;
-        }
-        full
-    }
-}
-
-impl GasConfigFull {
-    /// Calculate gas fee by gas used value
-    pub fn calc_gas_fee(&self, gas_used: u64) -> u128 {
-        // There is a flat_gas_limit value which is the minimum gas value possible and has fixed price.
-        // If actual gas value is less then flat_gas_limit then flat_gas_price paid.
-        // If actual gas value is bigger then flat_gas_limit then flat_gas_price paid for first 
-        // flat_gas_limit gas and remaining value costs gas_price
-        if gas_used <= self.flat_gas_limit {
-            self.flat_gas_price as u128
-        } else {
-            // gas_price is pseudo value (shifted by 16 as forward and storage price)
-            // after calculation divide by 0xffff with ceil rounding
-            self.flat_gas_price as u128 + (((gas_used - self.flat_gas_limit) as u128 * self.gas_price as u128 + 0xffff) >> 16)
-        }
-    }
-
-    /// Get gas price in nanograms
-    pub fn get_real_gas_price(&self) -> u64 {
-        self.gas_price >> 16
-    }
-
-    /// Calculate gas by grams balance
-    pub fn calc_gas(&self, value: u128) -> u64 {
-        if value >= self.max_gas_threshold {
-            return self.gas_limit
-        }
-        if value < self.flat_gas_price as u128 {
-            return 0
-        }
-        let res = ((value - self.flat_gas_price as u128) << 16) / (self.gas_price as u128);
-        self.flat_gas_limit + res as u64
-    }
-}
-
 /// Blockchain configuration parameters
 #[derive(Clone)]
 pub struct BlockchainConfig {
-    gas_prices_mc: GasConfigFull,
-    gas_prices_wc: GasConfigFull,
+    gas_prices_mc: GasLimitsPrices,
+    gas_prices_wc: GasLimitsPrices,
 
     fwd_prices_mc: MsgForwardPrices,
     fwd_prices_wc: MsgForwardPrices,
@@ -321,8 +212,8 @@ pub struct BlockchainConfig {
 impl Default for BlockchainConfig {
     fn default() -> Self {
         BlockchainConfig {
-            gas_prices_mc: GasConfigFull::default_mc(),
-            gas_prices_wc: GasConfigFull::default_wc(),
+            gas_prices_mc: GasLimitsPrices::default_mc(),
+            gas_prices_wc: GasLimitsPrices::default_wc(),
             fwd_prices_mc: MsgForwardPrices::default_mc(),
             fwd_prices_wc: MsgForwardPrices::default_wc(),
             storage_prices: AccStoragePrices::default(),
@@ -368,8 +259,8 @@ impl BlockchainConfig {
     /// Create `BlockchainConfig` struct with `ConfigParams` taken from blockchain
     pub fn with_config(config: ConfigParams) -> Result<Self> {
         Ok(BlockchainConfig {
-            gas_prices_mc: GasConfigFull::from(&config.gas_prices(true)?),
-            gas_prices_wc: GasConfigFull::from(&config.gas_prices(false)?),
+            gas_prices_mc: config.gas_prices(true)?,
+            gas_prices_wc: config.gas_prices(false)?,
 
             fwd_prices_mc: config.fwd_prices(true)?,
             fwd_prices_wc: config.fwd_prices(false)?,
@@ -398,8 +289,8 @@ impl BlockchainConfig {
         self.get_gas_config(address).calc_gas_fee(gas_used)
     }
 
-    /// Get `GasConfigFull` for account gas fee calculation
-    pub fn get_gas_config(&self, address: &MsgAddressInt) -> &GasConfigFull {
+    /// Get `GasLimitsPrices` for account gas fee calculation
+    pub fn get_gas_config(&self, address: &MsgAddressInt) -> &GasLimitsPrices {
         if Self::is_masterchain_address(address) {
             &self.gas_prices_mc
         } else {
@@ -408,13 +299,13 @@ impl BlockchainConfig {
     }
 
     /// Calculate account storage fee
-    pub fn calc_storage_fee(&self, storage: &StorageInfo, address: &MsgAddressInt, now: u32) -> u128 {        
+    pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> u128 {        
         self.storage_prices.calc_storage_fee(
             u128::from(storage.used.cells.0),
             u128::from(storage.used.bits.0),
             storage.last_paid,
             now,
-            address.get_workchain_id() == MASTERCHAIN_ID)
+            is_masterchain)
     }
 
     /// Check if account is special TON account
