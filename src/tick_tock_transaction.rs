@@ -139,7 +139,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             account = old_account;
         }
         log::debug!(target: "executor", "calculate Hash update");
-        account.set_last_tr_time(lt + 1);
+        account.set_last_tr_time(last_tr_lt.load(Ordering::SeqCst));
         *account_root = account.write_to_new_cell()?.into();
         let new_hash = account_root.repr_hash();
         tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;

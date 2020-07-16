@@ -152,7 +152,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 tr.total_fees_mut().add(&CurrencyCollection::from_grams(phase.gas_fees.clone()))?;
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
-                    log::debug!(target: "executor", "action_phase");
+                    log::debug!(target: "executor", "action_phase {}", last_tr_lt.load(Ordering::SeqCst));
                     self.action_phase(&mut tr, &mut account, actions, &self.config, last_tr_lt.clone(), is_special)
                 } else {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
@@ -190,7 +190,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             description.bounce = self.bounce_phase(in_msg.clone(), &mut account, &mut tr, 0, fwd_prices);
         }
         log::debug!(target: "executor", "calculate Hash update");
-        account.set_last_tr_time(lt + 1);
+        account.set_last_tr_time(last_tr_lt.load(Ordering::SeqCst));
         *account_root = account.write_to_new_cell()?.into();
         let new_hash = account_root.repr_hash();
         tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
