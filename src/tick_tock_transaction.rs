@@ -83,14 +83,14 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();
 
-        description.storage = match self.storage_phase(&mut account, &mut tr, &self.config, is_special) {
+        description.storage = match self.storage_phase(&mut account, &mut tr, is_special) {
             Some(storage_ph) => storage_ph,
             None => fail!("Problem with storage phase")
         };
         let old_account = account.clone();
 
         log::debug!(target: "executor", "compute_phase {}", lt);
-        let smci = self.build_contract_info(self.config.raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
+        let smci = self.build_contract_info(self.config().raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
         let (compute_ph, actions) = self.compute_phase(
             None, 
             &mut account,
@@ -108,7 +108,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", last_tr_lt.load(Ordering::SeqCst));
-                    self.action_phase(&mut tr, &mut account, actions, &self.config, last_tr_lt.clone(), is_special)
+                    self.action_phase(&mut tr, &mut account, actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
                 } else {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
                     None

@@ -14,10 +14,9 @@
 use ton_block::{
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
     GasLimitsPrices, Message, MsgAddressInt, 
-    MsgForwardPrices, Serializable, StorageInfo, StoragePrices, StorageUsedShort,
-    MASTERCHAIN_ID
+    MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
 };
-use ton_types::{AccountId, BuilderData, Result};
+use ton_types::{AccountId, Cell, Result};
 
 pub trait TONDefaultConfig {
     /// Get default value for masterchain
@@ -51,23 +50,20 @@ impl TONDefaultConfig for MsgForwardPrices {
 }
 
 pub trait CalcMsgFwdFees {
-    fn calc_fwd_fee(&self, msg: &Message) -> Result<(StorageUsedShort, u128)>;
+    fn calc_fwd_fee(&self, msg_cell: &Cell) -> (StorageUsedShort, u128);
     fn calc_ihr_fee(&self, fwd_fee: u128) -> u128;
     fn calc_mine_fee(&self, fwd_fee: u128) -> u128;
 }
 
-impl CalcMsgFwdFees for MsgForwardPrices{
+impl CalcMsgFwdFees for MsgForwardPrices {
     /// Calculate message forward fee
     /// Forward fee is calculated according to the following formula:
     /// `fwd_fee = (lump_price + ceil((bit_price * msg.bits + cell_price * msg.cells)/2^16))`.
     /// `msg.bits` and `msg.cells` are calculated from message represented as tree of cells. Root cell is not counted.
-    fn calc_fwd_fee(&self, msg: &Message) -> Result<(StorageUsedShort, u128)> {
-        let msg_cell = msg.write_to_new_cell()?;
-        let root_bits = msg_cell.bits_used();
-        let mut storage = StorageUsedShort::calculate_for_cell(&msg_cell.into());
+    fn calc_fwd_fee(&self, msg_cell: &Cell) -> (StorageUsedShort, u128) {
+        let mut storage = StorageUsedShort::calculate_for_cell(msg_cell);
         storage.cells.0 -= 1;
-        storage.bits.0 -= root_bits as u64;
-
+        storage.bits.0 -= msg_cell.bit_length() as u64;
         let cells = u128::from(storage.cells.0);
         let bits = u128::from(storage.bits.0);
 
@@ -76,10 +72,8 @@ impl CalcMsgFwdFees for MsgForwardPrices{
         // but calculations are performed in integers, so prices are multiplied to some big
         // number (0xffff) and fee calculation uses such values. At the end result is divided by
         // 0xffff with ceil rounding to obtain nanograms (add 0xffff and then `>> 16`)
-        Ok((
-            storage,
-            self.lump_price as u128 + ((cells * self.cell_price as u128 + bits * self.bit_price as u128 + 0xffff) >> 16)
-        ))
+        let fwd_fee = self.lump_price as u128 + ((cells * self.cell_price as u128 + bits * self.bit_price as u128 + 0xffff) >> 16);
+        (storage, fwd_fee)
     }
 
     /// Calculate message IHR fee
@@ -275,9 +269,7 @@ impl BlockchainConfig {
 
     /// Get `MsgForwardPrices` for message forward fee calculation
     pub fn get_fwd_prices(&self, msg: &Message) -> &MsgForwardPrices {
-        if  Some(MASTERCHAIN_ID) == msg.workchain_id() ||
-            Some(MASTERCHAIN_ID) == msg.src_workchain_id()
-        {
+        if msg.is_masterchain() {
             &self.fwd_prices_mc
         } else {
             &self.fwd_prices_wc
@@ -291,7 +283,7 @@ impl BlockchainConfig {
 
     /// Get `GasLimitsPrices` for account gas fee calculation
     pub fn get_gas_config(&self, address: &MsgAddressInt) -> &GasLimitsPrices {
-        if Self::is_masterchain_address(address) {
+        if address.is_masterchain() {
             &self.gas_prices_mc
         } else {
             &self.gas_prices_wc
@@ -301,8 +293,8 @@ impl BlockchainConfig {
     /// Calculate account storage fee
     pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> u128 {        
         self.storage_prices.calc_storage_fee(
-            u128::from(storage.used.cells.0),
-            u128::from(storage.used.bits.0),
+            storage.used.cells.0.into(),
+            storage.used.bits.0.into(),
             storage.last_paid,
             now,
             is_masterchain)
@@ -310,23 +302,18 @@ impl BlockchainConfig {
 
     /// Check if account is special TON account
     pub fn is_special_account(&self, address: &MsgAddressInt) -> Result<bool> {
-        if Self::is_masterchain_address(address) {
+        if address.is_masterchain() {
             let account_id = address.get_address();
             // special account adresses are stored in hashmap
             // config account is special too
             Ok(
-                self.raw_config.config_addr.write_to_new_cell()? == BuilderData::from_slice(&account_id) ||
+                self.raw_config.config_addr == account_id ||
                 self.special_contracts.check_key(&account_id)?
             )
 
         } else {
             Ok(false)
         }
-    }
-
-    /// Check if address belongs to masterchain
-    pub fn is_masterchain_address(address: &MsgAddressInt) -> bool {
-        address.get_workchain_id() == MASTERCHAIN_ID
     }
 
     pub fn raw_config(&self) -> &ConfigParams {
