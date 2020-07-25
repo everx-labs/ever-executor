@@ -533,26 +533,12 @@ pub trait TransactionExecutor {
 /// If account exists - it can be frozen.
 /// Returns computed initial phase.
 fn compute_new_state(acc: &mut Account, in_msg: &Message, now: u32) -> TrComputePhase {
-    let mut bounce = false;
-    if let CommonMsgInfo::IntMsgInfo(ref header) = in_msg.header() {
-        bounce = header.bounce;
-    }
-    match acc {
-        Account::AccountNone => {
-            let (new_acc, phase) = create_account_state(in_msg, bounce, now);
-            *acc = new_acc;
-            phase
-        }
-        _ => compute_account_state(acc, in_msg, bounce)
-    }
-}
-
-fn compute_account_state(acc: &mut Account, in_msg: &Message, bounce: bool) -> TrComputePhase {
+    let bounce = in_msg.int_header().map(|header| header.bounce).unwrap_or_default();
     log::debug!(target: "executor", "compute_account_state");    
     match acc.state() {
         None => {
             log::error!(target: "executor", "account must exist");
-            TrComputePhase::default()
+            create_account_state(acc, in_msg, bounce, now)
         }
         //Account exists, but can be in different states.
         Some(AccountState::AccountActive(_)) => {
@@ -565,28 +551,11 @@ fn compute_account_state(acc: &mut Account, in_msg: &Message, bounce: bool) -> T
             if let Some(state_init) = in_msg.state_init() {
                 // if msg is a constructor message then
                 // borrow code and data from it and switch account state to 'active'.
-                acc.activate(state_init.clone());
                 log::debug!(target: "executor", "external message for uninitialized: activated");
+                acc.activate(state_init.clone());
                 TrComputePhase::Vm(TrComputePhaseVm::activated(true))
-            } else if bounce {
-                //skip computing phase, because account is uninitialized
-                //and msg doesn't contain StateInit.  );
-                log::debug!(target: "executor", "skipped_phase_no_state");
-                TrComputePhase::default()
-            } else if in_msg.get_value().is_some() {
-                //account is uninitialized, but we can send grams to it,
-                //we will not skip computing phase, but invoke TVM as if
-                //the code of the smart contract was empty 
-                //(i.e., consisting of an implicit RET)
-                log::debug!(target: "executor", "account is uninitialized, but we can send grams to it");
-                TrComputePhase::Vm(TrComputePhaseVm::default())
             } else {
-                //external message for uninitialized account,
-                //skip computing phase.
-                log::debug!(
-                    target: "executor", 
-                    "external message for uninitialized: skip computing phase"
-                );
+                log::debug!(target: "executor", "message for uninitialized: skip computing phase");
                 TrComputePhase::default()
             }
         }
@@ -608,44 +577,38 @@ fn compute_account_state(acc: &mut Account, in_msg: &Message, bounce: bool) -> T
     }
 }
 
-fn create_account_state(in_msg: &Message, bounce: bool, now: u32) -> (Account, TrComputePhase) {
+fn create_account_state(acc: &mut Account, in_msg: &Message, bounce: bool, now: u32) -> TrComputePhase {
     log::debug!(target: "executor", "create_account_state");
     //try to create account with constructor message
-    if let Ok(mut new_acc) = Account::with_message(in_msg) {
+    if let Ok(new_acc) = Account::with_message(in_msg) {
         //account created from constructor message
         //but check that inbound message bear some value,
         //otherwise it will be frozen
+        *acc = new_acc;
         if in_msg.get_value().is_some() {
             log::debug!(target: "executor", "new acc is created");
-            new_acc.set_last_paid(now);
+            acc.set_last_paid(now);
             //it's ok - active account will be created.
             //set apropriate flags in phase.
             //return activated account
-            (new_acc, TrComputePhase::Vm(TrComputePhaseVm::activated(true)))
+            return TrComputePhase::Vm(TrComputePhaseVm::activated(true))
         } else {
             log::debug!(target: "executor", "new acc is created and frozen");
-            new_acc.freeze_account();
-            (new_acc, TrComputePhase::default())
+            acc.freeze_account();
         }
     //message has no code and data,
     //check bounce flag
     } else if bounce {
         //let skip computing phase, because account not exist and bounce flag is setted. 
         //Account will not be created, return AccountNone
-        (Account::default(), TrComputePhase::default())
     } else if let Some(balance) =  in_msg.get_value().cloned() {
         //value-bearing message with no bounce: create uninitialized account
         log::debug!(target: "executor", "new uninitialized acc is created");
         let address = in_msg.dst().unwrap_or_default();
-        let mut new_acc = Account::with_address_and_ballance(&address, &balance);
-        new_acc.set_last_paid(now);
-        let phase = TrComputePhase::skipped(ComputeSkipReason::default());
-        (new_acc, phase)
-    } else {
-        //external message: skip computing phase and account will not be created
-        //return undefined account
-        (Account::default(), TrComputePhase::default())
+        *acc = Account::with_address_and_ballance(&address, &balance);
+        acc.set_last_paid(now);
     }
+    TrComputePhase::default()
 }
 
 fn outmsg_action_handler(
