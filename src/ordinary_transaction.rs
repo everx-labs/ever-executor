@@ -22,7 +22,7 @@ use std::{sync::{atomic::{AtomicU64, Ordering}, Arc}};
 use std::time::Instant;
 use ton_block::{
     AddSub, CurrencyCollection, Serializable, Deserializable,
-    Account, CommonMsgInfo, Message, HashUpdate,
+    Account, AccStatusChange, CommonMsgInfo, Message, HashUpdate,
     Transaction, TransactionDescrOrdinary, TransactionDescr,
     TrComputePhase,
 };
@@ -103,8 +103,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         description.credit_first = credit_first;
 
         // TODO: add and process ihr_delivered parameter (if ihr_delivered ihr_fee is added to total fees)
-        // TODO: add msg_balance_remaining variable and use it in phases 
+        let mut msg_remaining_balance = in_msg.get_value().cloned().unwrap_or_default();
 
+        // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
             let (_, in_fwd_fee) = self.config.get_fwd_prices(&in_msg).calc_fwd_fee(&in_msg.serialize()?);
             let in_fwd_fee = CurrencyCollection::with_grams(in_fwd_fee as u64);
@@ -114,14 +115,14 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             tr.set_total_fees(in_fwd_fee);
         }
 
-        if credit_first {
+        if description.credit_first {
             description.credit_ph = self.credit_phase(&in_msg, &mut account);
         }
         description.storage_ph = self.storage_phase(&mut account, &mut tr, is_special);
         log::debug!(target: "executor",
             "storage_phase: {}", if description.storage_ph.is_some() {"present"} else {"none"});
 
-        if !credit_first {
+        if !description.credit_first {
             description.credit_ph = self.credit_phase(&in_msg, &mut account);
         }
         log::debug!(target: "executor", 
@@ -141,7 +142,6 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             state_libs,
             &smci,
             self,
-            self.config.get_gas_config(account_address),
             is_special,
             debug
         )?;
@@ -153,17 +153,17 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 tr.total_fees_mut().add(&CurrencyCollection::from_grams(phase.gas_fees.clone()))?;
                 gas_fees = phase.gas_fees.clone();
                 if phase.success {
-                    log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
+                    log::debug!(target: "executor", "compute_phase: success");
                     log::debug!(target: "executor", "action_phase {}", last_tr_lt.load(Ordering::SeqCst));
-                    self.action_phase(&mut tr, &mut account, actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
+                    self.action_phase(&mut tr, &mut account, &mut msg_remaining_balance, actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
                 } else {
-                    log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
+                    log::debug!(target: "executor", "compute_phase: failed");
                     None
                 }
             }
             TrComputePhase::Skipped(ref skipped) => {
                 log::debug!(target: "executor", 
-                    "compute_phase: skipped: reason {:?}", skipped.reason);
+                    "compute_phase: skipped reason {:?}", skipped.reason);
                 None
             }
         };
@@ -175,6 +175,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             Some(ref phase) => {
                 log::debug!(target: "executor", 
                     "action_phase: present: success={}, err_code={}", phase.success, phase.result_code);
+                match phase.status_change {
+                    AccStatusChange::Deleted => account = Account::default(),
+                    AccStatusChange::Frozen => account.freeze_account(),
+                    _ => ()
+                }
                 !phase.success
             },
             None => {

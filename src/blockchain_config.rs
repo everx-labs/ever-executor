@@ -117,6 +117,9 @@ impl Default for AccStoragePrices {
 impl AccStoragePrices {
     /// Calculate storage fee for provided data
     pub fn calc_storage_fee(&self, cells: u128, bits: u128, mut last_paid: u32, now: u32, is_masterchain: bool) -> u128 {
+        if now <= last_paid || last_paid == 0 || self.prices.len() == 0 || now <= self.prices[0].utime_since {
+            return 0
+        }
         let mut fee = 0u128;
         // storage prices config contains prices array for some time intervals
         // to calculate account storage fee we need to sum fees for all intervals since last
@@ -278,12 +281,12 @@ impl BlockchainConfig {
 
     /// Calculate gas fee for account
     pub fn calc_gas_fee(&self, gas_used: u64, address: &MsgAddressInt) -> u128 {
-        self.get_gas_config(address).calc_gas_fee(gas_used)
+        self.get_gas_config(address.is_masterchain()).calc_gas_fee(gas_used)
     }
 
     /// Get `GasLimitsPrices` for account gas fee calculation
-    pub fn get_gas_config(&self, address: &MsgAddressInt) -> &GasLimitsPrices {
-        if address.is_masterchain() {
+    pub fn get_gas_config(&self, is_masterchain: bool) -> &GasLimitsPrices {
+        if is_masterchain {
             &self.gas_prices_mc
         } else {
             &self.gas_prices_wc
@@ -297,7 +300,8 @@ impl BlockchainConfig {
             storage.used.bits.0.into(),
             storage.last_paid,
             now,
-            is_masterchain)
+            is_masterchain
+        )
     }
 
     /// Check if account is special TON account

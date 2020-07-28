@@ -97,7 +97,6 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             state_libs,
             &smci, 
             self,
-            &self.config.get_gas_config(&account_address),
             is_special,
             debug
         )?;
@@ -108,7 +107,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", last_tr_lt.load(Ordering::SeqCst));
-                    self.action_phase(&mut tr, &mut account, actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
+                    self.action_phase(&mut tr, &mut account, &mut Default::default(), actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
                 } else {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
                     None
