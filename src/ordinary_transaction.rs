@@ -218,9 +218,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             None => return stack
         };
         let account_balance = int!(account.get_balance().map(|value| value.grams.0.clone()).unwrap_or_default());
-        let msg_balance = int!(
-            in_msg.get_value().map(|val| val.grams.value().clone()).unwrap_or_default()
-        );
+        let msg_balance = int!(in_msg.get_value().map(|val| val.grams.0).unwrap_or_default());
         let function_selector = match in_msg.header() {
             CommonMsgInfo::IntMsgInfo(_) => int!(0),
             _ => int!(-1),

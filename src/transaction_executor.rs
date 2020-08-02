@@ -16,7 +16,6 @@ use crate::{
     error::ExecutorError, vmsetup::VMSetup,
 };
 
-use num_traits::ToPrimitive;
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
     Deserializable, GetRepresentationHash, Serializable,
@@ -76,8 +75,8 @@ pub trait TransactionExecutor {
         *info.trans_lt_mut() = tr_lt;
         *info.unix_time_mut() = block_unixtime;
         if let Some(balance) = acc.get_balance() {
-            // info.set_remaining_balance(balance.grams.value().to_u128().unwrap_or_default(), balance.other.clone());
-            *info.balance_remaining_grams_mut() = balance.grams.value().to_u128().unwrap_or_default();
+            // info.set_remaining_balance(balance.grams.0, balance.other.clone());
+            *info.balance_remaining_grams_mut() = balance.grams.0;
             *info.balance_remaining_other_mut() = balance.other_as_hashmap();
         }
         if let Some(data) = config_params.config_params.data() {
@@ -181,9 +180,7 @@ pub trait TransactionExecutor {
                 log::debug!(target: "executor", "msg internal");
                 if acc == &Account::AccountNone && create_account_state(acc, msg, header.bounce, smc_info.unix_time()) {
                 }
-                (header.value.grams.value().to_u128()
-                    .ok_or_else(|| ExecutorError::TrExecutorError("Failed to \
-                        convert msg balance to u128".to_string()))?, false)
+                (header.value.grams.0, false)
             } else {
                 log::debug!(target: "executor", "msg external");
                 (0, true)
@@ -194,9 +191,7 @@ pub trait TransactionExecutor {
             (0, false)
         };
         let acc_balance = match acc.get_balance() {
-            Some(value) => value.grams.value().to_u128()
-                .ok_or_else(|| ExecutorError::TrExecutorError("Failed to \
-                    convert account balance to u128".to_string()))?,
+            Some(value) => value.grams.0,
             None => 0
         };
         log::debug!(target: "executor", "acc balance: {}", acc_balance);
@@ -678,13 +673,13 @@ fn outmsg_action_handler(
         result_grams = int_header.value.grams.clone();
         ihr_fee = int_header.ihr_fee.clone();
         if !int_header.ihr_disabled {
-            let compute_ihr_fee = fwd_prices.calc_ihr_fee(compute_fwd_fee.value().to_u128().unwrap_or(0)).into();
+            let compute_ihr_fee = fwd_prices.calc_ihr_fee(compute_fwd_fee.0).into();
             if ihr_fee < compute_ihr_fee {
                 ihr_fee = compute_ihr_fee;
             }
         }
         fwd_fee = std::cmp::max(&int_header.fwd_fee, &compute_fwd_fee).clone();
-        fwd_mine_fee = Grams::from(fwd_prices.calc_mine_fee(fwd_fee.value().to_u128().unwrap_or(0)));
+        fwd_mine_fee = Grams::from(fwd_prices.calc_mine_fee(fwd_fee.0));
 
         let fwd_remain_fee = fwd_fee.0.clone() - fwd_mine_fee.0.clone();
         if (mode & SENDMSG_ALL_BALANCE) != 0 {
