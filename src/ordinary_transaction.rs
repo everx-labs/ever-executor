@@ -107,8 +107,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
-            let (_, in_fwd_fee) = self.config.get_fwd_prices(&in_msg).calc_fwd_fee(&in_msg.serialize()?);
-            let in_fwd_fee = CurrencyCollection::with_grams(in_fwd_fee as u64);
+            let (_, in_fwd_fee) = self.config.get_fwd_prices(in_msg.is_masterchain()).fwd_fee(&in_msg.serialize()?);
+            let in_fwd_fee = CurrencyCollection::from_grams(in_fwd_fee);
             if !account.sub_funds(&in_fwd_fee)? {
                 fail!(ExecutorError::NoFundsToImportMsg)
             }
@@ -218,9 +218,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             None => return stack
         };
         let account_balance = int!(account.get_balance().map(|value| value.grams.0.clone()).unwrap_or_default());
-        let msg_balance = int!(
-            in_msg.get_value().map(|val| val.grams.value().clone()).unwrap_or_default()
-        );
+        let msg_balance = int!(in_msg.get_value().map(|val| val.grams.0).unwrap_or_default());
         let function_selector = match in_msg.header() {
             CommonMsgInfo::IntMsgInfo(_) => int!(0),
             _ => int!(-1),

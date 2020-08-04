@@ -12,8 +12,9 @@
 */
 
 use ton_block::{
+    Grams,
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
-    GasLimitsPrices, Message, MsgAddressInt, 
+    GasLimitsPrices, MsgAddressInt, 
     MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
 };
 use ton_types::{AccountId, Cell, Result};
@@ -50,9 +51,10 @@ impl TONDefaultConfig for MsgForwardPrices {
 }
 
 pub trait CalcMsgFwdFees {
-    fn calc_fwd_fee(&self, msg_cell: &Cell) -> (StorageUsedShort, u128);
-    fn calc_ihr_fee(&self, fwd_fee: u128) -> u128;
-    fn calc_mine_fee(&self, fwd_fee: u128) -> u128;
+    fn fwd_fee(&self, msg_cell: &Cell) -> (StorageUsedShort, Grams);
+    fn ihr_fee (&self, fwd_fee: &Grams) -> Grams;
+    fn mine_fee(&self, fwd_fee: &Grams) -> Grams;
+    fn next_fee(&self, fwd_fee: &Grams) -> Grams;
 }
 
 impl CalcMsgFwdFees for MsgForwardPrices {
@@ -60,7 +62,7 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// Forward fee is calculated according to the following formula:
     /// `fwd_fee = (lump_price + ceil((bit_price * msg.bits + cell_price * msg.cells)/2^16))`.
     /// `msg.bits` and `msg.cells` are calculated from message represented as tree of cells. Root cell is not counted.
-    fn calc_fwd_fee(&self, msg_cell: &Cell) -> (StorageUsedShort, u128) {
+    fn fwd_fee(&self, msg_cell: &Cell) -> (StorageUsedShort, Grams) {
         let mut storage = StorageUsedShort::calculate_for_cell(msg_cell);
         storage.cells.0 -= 1;
         storage.bits.0 -= msg_cell.bit_length() as u64;
@@ -73,13 +75,13 @@ impl CalcMsgFwdFees for MsgForwardPrices {
         // number (0xffff) and fee calculation uses such values. At the end result is divided by
         // 0xffff with ceil rounding to obtain nanograms (add 0xffff and then `>> 16`)
         let fwd_fee = self.lump_price as u128 + ((cells * self.cell_price as u128 + bits * self.bit_price as u128 + 0xffff) >> 16);
-        (storage, fwd_fee)
+        (storage, fwd_fee.into())
     }
 
     /// Calculate message IHR fee
     /// IHR fee is calculated as `(msg_forward_fee * ihr_factor) >> 16`
-    fn calc_ihr_fee(&self, fwd_fee: u128) -> u128 {
-        (fwd_fee * self.ihr_price_factor as u128) >> 16
+    fn ihr_fee(&self, fwd_fee: &Grams) -> Grams {
+        Grams::from((fwd_fee.0 * self.ihr_price_factor as u128) >> 16)
     }
 
     /// Calculate mine part of forward fee
@@ -88,8 +90,11 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// `int_msg_mine_fee` is a part of transaction `total_fees` and will go validators of account's shard
     /// `int_msg_remain_fee` is placed in header of internal message and will go to validators 
     /// of shard to which message destination address is belong.
-    fn calc_mine_fee(&self, fwd_fee: u128) -> u128 {
-        (fwd_fee * self.first_frac as u128) >> 16
+    fn mine_fee(&self, fwd_fee: &Grams) -> Grams {
+        Grams::from((fwd_fee.0 * self.first_frac as u128) >> 16)
+    }
+    fn next_fee(&self, fwd_fee: &Grams) -> Grams {
+        Grams::from((fwd_fee.0 * self.next_frac as u128) >> 16)
     }
 }
 
@@ -271,8 +276,8 @@ impl BlockchainConfig {
     }
 
     /// Get `MsgForwardPrices` for message forward fee calculation
-    pub fn get_fwd_prices(&self, msg: &Message) -> &MsgForwardPrices {
-        if msg.is_masterchain() {
+    pub fn get_fwd_prices(&self, is_masterchain: bool) -> &MsgForwardPrices {
+        if is_masterchain {
             &self.fwd_prices_mc
         } else {
             &self.fwd_prices_wc

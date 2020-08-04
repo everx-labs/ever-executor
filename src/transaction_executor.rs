@@ -16,7 +16,6 @@ use crate::{
     error::ExecutorError, vmsetup::VMSetup,
 };
 
-use num_traits::ToPrimitive;
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
     Deserializable, GetRepresentationHash, Serializable,
@@ -76,8 +75,8 @@ pub trait TransactionExecutor {
         *info.trans_lt_mut() = tr_lt;
         *info.unix_time_mut() = block_unixtime;
         if let Some(balance) = acc.get_balance() {
-            // info.set_remaining_balance(balance.grams.value().to_u128().unwrap_or_default(), balance.other.clone());
-            *info.balance_remaining_grams_mut() = balance.grams.value().to_u128().unwrap_or_default();
+            // info.set_remaining_balance(balance.grams.0, balance.other.clone());
+            *info.balance_remaining_grams_mut() = balance.grams.0;
             *info.balance_remaining_other_mut() = balance.other_as_hashmap();
         }
         if let Some(data) = config_params.config_params.data() {
@@ -123,7 +122,7 @@ pub trait TransactionExecutor {
         let balance = acc.get_balance()?.grams.clone();
         if balance >= fee {
             let fee = CurrencyCollection::from_grams(fee);
-            log::debug!(target: "executor", "storage fee: {}", fee.grams.0);
+            log::debug!(target: "executor", "storage fee: {}", fee.grams);
             acc_sub_funds(acc, &fee)?;
             tr.total_fees_mut().add(&fee).ok()?;
             log::debug!(target: "executor", "AccStatusChange::Unchanged");
@@ -132,7 +131,7 @@ pub trait TransactionExecutor {
         } else {
             fee.sub(&balance).ok()?;
             let balance = CurrencyCollection::from_grams(balance);
-            log::debug!(target: "executor", "storage fee: {}", balance.grams.0);
+            log::debug!(target: "executor", "storage fee: {}", balance.grams);
             acc_sub_funds(acc, &balance)?;
             acc.freeze_account();
             tr.total_fees_mut().add(&balance).ok()?;
@@ -155,7 +154,7 @@ pub trait TransactionExecutor {
             }
             return None
         }
-        log::debug!(target: "executor", "add funds {}", header.value.grams.0);
+        log::debug!(target: "executor", "add funds {}", header.value.grams);
         acc.add_funds(&header.value).ok()?;
         Some(TrCreditPhase::with_params(None, header.value.clone()))
         //TODO: Is it need to credit with ihr_fee value in internal messages?
@@ -181,9 +180,7 @@ pub trait TransactionExecutor {
                 log::debug!(target: "executor", "msg internal");
                 if acc == &Account::AccountNone && create_account_state(acc, msg, header.bounce, smc_info.unix_time()) {
                 }
-                (header.value.grams.value().to_u128()
-                    .ok_or_else(|| ExecutorError::TrExecutorError("Failed to \
-                        convert msg balance to u128".to_string()))?, false)
+                (header.value.grams.0, false)
             } else {
                 log::debug!(target: "executor", "msg external");
                 (0, true)
@@ -193,12 +190,7 @@ pub trait TransactionExecutor {
             is_masterchain = acc.get_addr().map(|addr| addr.is_masterchain()).unwrap_or_default();
             (0, false)
         };
-        let acc_balance = match acc.get_balance() {
-            Some(value) => value.grams.value().to_u128()
-                .ok_or_else(|| ExecutorError::TrExecutorError("Failed to \
-                    convert account balance to u128".to_string()))?,
-            None => 0
-        };
+        let acc_balance = acc.get_balance().map(|value| value.grams.0).unwrap_or_default();
         log::debug!(target: "executor", "acc balance: {}", acc_balance);
         log::debug!(target: "executor", "msg balance: {}", msg_balance);
         let is_ordinary = self.ordinary_transaction();
@@ -281,7 +273,7 @@ pub trait TransactionExecutor {
         log::debug!(
             target: "executor", 
             "gas after: gl: {}, gc: {}, gu: {}, fees:{}", 
-            gas.get_gas_limit() as u64, credit, used, vm_phase.gas_fees.0
+            gas.get_gas_limit() as u64, credit, used, vm_phase.gas_fees
         );
     
         //set mode
@@ -513,10 +505,9 @@ pub trait TransactionExecutor {
         let msg_dst = std::mem::replace(&mut header.dst, msg_src);
         header.src = MsgAddressIntOrNone::Some(msg_dst);
 
-        let (storage, fwd_full_fees) = fwd_prices.calc_fwd_fee(&Cell::default());
-        let fwd_mine_fees = fwd_prices.calc_mine_fee(fwd_full_fees);
-        let fwd_fees = fwd_full_fees - fwd_mine_fees;
-        let fwd_full_fees = Grams::from(fwd_full_fees);
+        let (storage, fwd_full_fees) = fwd_prices.fwd_fee(&Cell::default());
+        let fwd_mine_fees = fwd_prices.mine_fee(&fwd_full_fees);
+        let fwd_fees = Grams::from(fwd_full_fees.0 - fwd_mine_fees.0);
 
         if !header.value.grams.sub(&gas_fee).ok()? {
             return Some(TrBouncePhase::no_funds(storage, fwd_full_fees))
@@ -524,14 +515,14 @@ pub trait TransactionExecutor {
         if header.value.grams.0 < fwd_full_fees.0 {
             return Some(TrBouncePhase::no_funds(storage, fwd_full_fees))
         }
-        log::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees.0, header.value.grams.0);
+        log::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees, header.value.grams);
         acc_sub_funds(acc, &header.value)?;
         header.value.grams.sub(&fwd_full_fees).ok()?;
         header.ihr_disabled = true;
         header.bounce = false;
         header.bounced = true;
         header.ihr_fee = Grams::zero();
-        header.fwd_fee = fwd_fees.into();
+        header.fwd_fee = fwd_fees.clone();
         header.created_lt = lt.fetch_add(1, Ordering::SeqCst);
         header.created_at = tr.now().into();
 
@@ -547,8 +538,8 @@ pub trait TransactionExecutor {
         tr.add_out_message(&bounce_msg)
             .map_err(|err| log::error!(target: "executor", "cannot add bounce \
                 message to new transaction : {}", err)).ok()?;
-        tr.total_fees_mut().grams.add(&fwd_mine_fees.into()).ok()?;
-        Some(TrBouncePhase::ok(storage, fwd_mine_fees.into(), fwd_fees.into()))
+        tr.total_fees_mut().grams.add(&fwd_mine_fees).ok()?;
+        Some(TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees))
     }
 }
 
@@ -655,18 +646,18 @@ fn outmsg_action_handler(
         return Err(RESULT_CODE_UNSUPPORTED);
     }
     let skip = (mode & SENDMSG_IGNORE_ERROR) != 0;
-    let (mut ihr_fee, fwd_fee, fwd_mine_fee);
+    let (fwd_mine_fee, total_fwd_fees);
     let mut result_grams; // to sub from acc_remaining_balance
 
     // TODO: check and rewrite src and dst adresses (see check_replace_src_addr and 
     // check_rewrite_dest_addr functions)
 
-    let fwd_prices = config.get_fwd_prices(msg);
+    let fwd_prices = config.get_fwd_prices(msg.is_masterchain());
     let compute_fwd_fee = if is_special {
         Grams::default()
     } else {
         msg.serialize()
-        .map(|cell| fwd_prices.calc_fwd_fee(&cell).1.into())
+        .map(|cell| fwd_prices.fwd_fee(&cell).1)
         .map_err(|err| {
             log::error!(target: "executor", "cannot serialize message in action phase : {}", err);
             RESULT_CODE_ACTIONLIST_INVALID
@@ -676,17 +667,18 @@ fn outmsg_action_handler(
     if let Some(int_header) = msg.int_header_mut() {
         let mut new_msg_value = int_header.value.clone();
         result_grams = int_header.value.grams.clone();
-        ihr_fee = int_header.ihr_fee.clone();
+        let mut ihr_fee = int_header.ihr_fee.clone();
         if !int_header.ihr_disabled {
-            let compute_ihr_fee = fwd_prices.calc_ihr_fee(compute_fwd_fee.value().to_u128().unwrap_or(0)).into();
+            let compute_ihr_fee = fwd_prices.ihr_fee(&compute_fwd_fee);
             if ihr_fee < compute_ihr_fee {
                 ihr_fee = compute_ihr_fee;
             }
         }
-        fwd_fee = std::cmp::max(&int_header.fwd_fee, &compute_fwd_fee).clone();
-        fwd_mine_fee = Grams::from(fwd_prices.calc_mine_fee(fwd_fee.value().to_u128().unwrap_or(0)));
+        let fwd_fee = std::cmp::max(&int_header.fwd_fee, &compute_fwd_fee).clone();
+        fwd_mine_fee = fwd_prices.mine_fee(&fwd_fee);
+        total_fwd_fees = Grams::from(fwd_fee.0 + ihr_fee.0);
 
-        let fwd_remain_fee = fwd_fee.0.clone() - fwd_mine_fee.0.clone();
+        let fwd_remain_fee = fwd_fee.0 - fwd_mine_fee.0;
         if (mode & SENDMSG_ALL_BALANCE) != 0 {
             //send all remaining account balance
             result_grams = acc_remaining_balance.grams.clone();
@@ -702,22 +694,20 @@ fn outmsg_action_handler(
         }
         if (mode & SENDMSG_PAY_FEE_SEPARATELY) != 0 {
             //we must pay the fees, sum them with msg value
-            result_grams.0 += &ihr_fee.0;
-            result_grams.0 += &fwd_fee.0;
-        } else if new_msg_value.grams.0 < (&fwd_fee.0 + &ihr_fee.0) {
+            result_grams.0 += total_fwd_fees.0;
+        } else if new_msg_value.grams.0 < total_fwd_fees.0 {
             //msg value is too small, reciever cannot pay the fees 
             return if skip { Err(0) } else { 
                 log::error!(
                     target: "executor", 
                     "msg balance is too small, cannot pay fwd+ihr fees: need = {}, have = {}", 
-                    &fwd_fee.0 + &ihr_fee.0, new_msg_value.grams.0
+                    total_fwd_fees, new_msg_value.grams
                 );
                 Err(RESULT_CODE_NOT_ENOUGH_GRAMS) 
             };
         } else {
             //reciever will pay the fees
-            new_msg_value.grams.0 -= &ihr_fee.0;
-            new_msg_value.grams.0 -= &fwd_fee.0;
+            new_msg_value.grams.0 -= total_fwd_fees.0;
         }
 
         if acc_remaining_balance.grams.0 < result_grams.0 {
@@ -735,11 +725,11 @@ fn outmsg_action_handler(
         int_header.ihr_fee = ihr_fee.clone();
         int_header.value = new_msg_value;
     } else if msg.ext_out_header().is_some() {
-        ihr_fee = Grams::default();
-        fwd_fee = compute_fwd_fee.clone();
+        let fwd_fee = compute_fwd_fee.clone();
         fwd_mine_fee = compute_fwd_fee.clone();
+        total_fwd_fees = compute_fwd_fee.clone();
         // TODO: check if account can pay fee
-        result_grams = fwd_fee.clone();
+        result_grams = fwd_fee;
     } else {
         return Err(-1)
     }
@@ -751,17 +741,13 @@ fn outmsg_action_handler(
     }
 
     // total fwd fees is sum of messages full fwd and ihr fees
-    let mut total_fwd_fees = phase.total_fwd_fees.take().unwrap_or(Grams::default());
-    total_fwd_fees.0 += fwd_fee.0 + ihr_fee.0;
-    if !total_fwd_fees.is_zero() {
-        phase.total_fwd_fees = Some(total_fwd_fees);
+    if total_fwd_fees.0 != 0 {
+        phase.total_fwd_fees.get_or_insert(Grams::default()).0 += total_fwd_fees.0;
     }
 
     // total action fees is sum of messages fwd mine fees
-    let mut total_action_fees = phase.total_action_fees.take().unwrap_or(Grams::default());
-    total_action_fees.0 += fwd_mine_fee.0;
-    if !total_action_fees.is_zero() {
-        phase.total_action_fees = Some(total_action_fees);
+    if fwd_mine_fee.0 != 0 {
+        phase.total_action_fees.get_or_insert(Grams::default()).0 += fwd_mine_fee.0;
     }
 
     let msg_cell = msg.serialize().map_err(|err| {
