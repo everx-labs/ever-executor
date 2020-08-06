@@ -225,22 +225,6 @@ impl Default for BlockchainConfig {
     }
 }
 
-pub struct MsgFees {
-    pub fwd_mine_fee: u128,
-    pub fwd_remain_fee: u128,
-    pub ihr_fee: u128,
-}
-
-impl Default for MsgFees {
-    fn default() -> Self {
-        MsgFees {
-            fwd_mine_fee: 0,
-            fwd_remain_fee: 0,
-            ihr_fee: 0,
-        }
-    }
-}
-
 impl BlockchainConfig {
     fn get_default_special_contracts() -> FundamentalSmcAddresses {
         let mut map = FundamentalSmcAddresses::default();

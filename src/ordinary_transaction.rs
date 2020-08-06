@@ -95,6 +95,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 "Account = None, msg address = {:x}", in_msg.int_dst_account_id().unwrap_or_default())
         }
 
+        log::debug!(target: "executor", "credit_first: {}", credit_first);
+
         let is_special = self.config.is_special_account(account_address)?;
         let lt = last_tr_lt.fetch_add(1, Ordering::SeqCst);
         let mut tr = Transaction::with_account_and_message(&account, &in_msg, lt)?;
@@ -115,14 +117,14 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             tr.set_total_fees(in_fwd_fee);
         }
 
-        if description.credit_first {
+        if description.credit_first && !is_ext_msg {
             description.credit_ph = self.credit_phase(&in_msg, &mut account);
         }
         description.storage_ph = self.storage_phase(&mut account, &mut tr, is_special);
         log::debug!(target: "executor",
             "storage_phase: {}", if description.storage_ph.is_some() {"present"} else {"none"});
 
-        if !description.credit_first {
+        if !description.credit_first && !is_ext_msg {
             description.credit_ph = self.credit_phase(&in_msg, &mut account);
         }
         log::debug!(target: "executor", 
@@ -146,24 +148,26 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             debug
         )?;
         let old_account = account.clone();
-        let mut gas_fees = Default::default();
+        let gas_fees;
         description.compute_ph = compute_ph;
         description.action = match description.compute_ph {
             TrComputePhase::Vm(ref phase) => {
                 tr.total_fees_mut().add(&CurrencyCollection::from_grams(phase.gas_fees.clone()))?;
-                gas_fees = phase.gas_fees.clone();
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: success");
-                    log::debug!(target: "executor", "action_phase {}", last_tr_lt.load(Ordering::SeqCst));
+                    log::debug!(target: "executor", "action_phase: lt={}", last_tr_lt.load(Ordering::SeqCst));
+                    gas_fees = None;
                     self.action_phase(&mut tr, &mut account, &mut msg_remaining_balance, actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
                 } else {
                     log::debug!(target: "executor", "compute_phase: failed");
+                    gas_fees = Some(phase.gas_fees.clone());
                     None
                 }
             }
             TrComputePhase::Skipped(ref skipped) => {
                 log::debug!(target: "executor", 
                     "compute_phase: skipped reason {:?}", skipped.reason);
+                gas_fees = Some(Default::default());
                 None
             }
         };
@@ -191,8 +195,10 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
         tr.set_end_status(account.status());
         if description.aborted {
-            log::debug!(target: "executor", "bounce_phase");
-            description.bounce = self.bounce_phase(&in_msg, &mut account, &mut tr, last_tr_lt.clone(), gas_fees.clone());
+            if let Some(gas_fees) = gas_fees {
+                log::debug!(target: "executor", "bounce_phase");
+                description.bounce = self.bounce_phase(&in_msg, &mut account, &mut tr, last_tr_lt.clone(), gas_fees);
+            }
             if description.bounce.is_none() {
                 account = old_account
             }
