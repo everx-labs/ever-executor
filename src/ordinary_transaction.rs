@@ -95,7 +95,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 "Account = None, msg address = {:x}", in_msg.int_dst_account_id().unwrap_or_default())
         }
 
-        log::debug!(target: "executor", "credit_first: {}", credit_first);
+        let acc_balance = account.get_balance().map(|value| value.grams.0).unwrap_or_default();
+        log::debug!(target: "executor", "acc_balance: {}, credit_first: {}", acc_balance, credit_first);
 
         let is_special = self.config.is_special_account(account_address)?;
         let lt = last_tr_lt.fetch_add(1, Ordering::SeqCst);
@@ -111,6 +112,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if is_ext_msg && !is_special {
             let (_, in_fwd_fee) = self.config.get_fwd_prices(in_msg.is_masterchain()).fwd_fee(&in_msg.serialize()?);
             let in_fwd_fee = CurrencyCollection::from_grams(in_fwd_fee);
+            log::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee.grams, acc_balance);
             if !account.sub_funds(&in_fwd_fee)? {
                 fail!(ExecutorError::NoFundsToImportMsg)
             }

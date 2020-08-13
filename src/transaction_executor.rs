@@ -838,8 +838,9 @@ fn init_gas(acc_balance: u128, msg_balance: u128, is_external: bool, is_special:
 }
 
 fn acc_sub_funds(acc: &mut Account, funds_to_sub: &CurrencyCollection) -> Option<()> {
-    log::debug!(target: "executor", "sub funds {}", funds_to_sub.grams.0);
+    let acc_balance = acc.get_balance().map(|value| value.grams.0).unwrap_or_default();
+    log::debug!(target: "executor", "acc_balance: {}, sub funds: {}", acc_balance, funds_to_sub.grams);
     acc.sub_funds(funds_to_sub).map_err(|err|
         log::error!(target: "executor", "cannot sub funds {:?} from account balance {:?} : {}",
-        funds_to_sub, acc.get_balance(), err)).ok().map(|_|())
+            funds_to_sub, acc_balance, err)).ok().map(|_|())
 }
