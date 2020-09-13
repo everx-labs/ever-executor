@@ -1,7 +1,7 @@
 FROM alpine:latest as ton-executor-src
 RUN addgroup --gid 1000 jenkins && \
     adduser -D -G jenkins jenkins
-COPY --chown=jenkins:jenkins ./Cargo.* ./*.md ./*.rs /tonlabs/ton-executor/
+COPY --chown=jenkins:jenkins ./remove_tests.sh ./Cargo.* ./*.md ./*.rs /tonlabs/ton-executor/
 COPY --chown=jenkins:jenkins ./src /tonlabs/ton-executor/src
 COPY --chown=jenkins:jenkins ./real_ton_boc /tonlabs/ton-executor/real_ton_boc
 WORKDIR /tonlabs/ton-executor
