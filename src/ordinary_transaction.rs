@@ -169,6 +169,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             TrComputePhase::Skipped(ref skipped) => {
                 log::debug!(target: "executor", 
                     "compute_phase: skipped reason {:?}", skipped.reason);
+                if is_ext_msg {
+                    fail!("inbound external message rejected by transaction")
+                }
                 gas_fees = Some(Default::default());
                 None
             }
@@ -183,7 +186,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     "action_phase: present: success={}, err_code={}", phase.success, phase.result_code);
                 match phase.status_change {
                     AccStatusChange::Deleted => account = Account::default(),
-                    AccStatusChange::Frozen => account.freeze_account(),
+                    AccStatusChange::Frozen => account.try_freeze()?,
                     _ => ()
                 }
                 !phase.success

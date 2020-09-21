@@ -134,9 +134,10 @@ pub trait TransactionExecutor {
             let balance = CurrencyCollection::from_grams(balance);
             log::debug!(target: "executor", "storage fee: {}", balance.grams);
             acc_sub_funds(acc, &balance)?;
-            acc.freeze_account();
+            acc.try_freeze().ok()?;
             tr.total_fees_mut().add(&balance).ok()?;
             log::debug!(target: "executor", "AccStatusChange::Frozen");
+            acc.set_last_paid(tr.now());
             Some(TrStoragePhase::with_params(balance.grams, Some(fee), AccStatusChange::Frozen))
         }
     }
@@ -544,9 +545,13 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipR
                 // if msg is a constructor message then
                 // borrow code and data from it and switch account state to 'active'.
                 log::debug!(target: "executor", "external message for uninitialized: activated");
-                // TODO: check hash of code and data
-                acc.activate(state_init.clone());
-                None
+                match acc.try_activate(&state_init) {
+                    Err(err) => {
+                        log::debug!(target: "executor", "reason: {}", err);
+                        Some(ComputeSkipReason::NoState)
+                    }
+                    Ok(_) => None
+                }
             } else {
                 log::debug!(target: "executor", "message for uninitialized: skip computing phase");
                 Some(ComputeSkipReason::NoState)
@@ -559,13 +564,18 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipR
             if !acc.get_balance().map(|balance| balance.grams.is_zero()).unwrap_or_default() {
                 if let Some(state_init) = in_msg.state_init() {
                     log::debug!(target: "executor", "external message for frozen: activated");
-                    acc.activate(state_init.clone());
-                    return None
+                    return match acc.try_activate(&state_init) {
+                        Err(err) => {
+                            log::debug!(target: "executor", "reason: {}", err);
+                            Some(ComputeSkipReason::NoState)
+                        }
+                        Ok(_) => None
+                    }
                 }
             }
             //skip computing phase, because account is frozen (bad state)
             log::debug!(target: "executor", "account is frozen (bad state): skip computing phase");
-            Some(ComputeSkipReason::BadState)
+            Some(ComputeSkipReason::NoState)
         }
     }
 }
@@ -587,7 +597,7 @@ fn create_account_state(acc: &mut Account, in_msg: &Message, bounce: bool, now: 
             return true
         } else {
             log::debug!(target: "executor", "new acc is created and frozen");
-            acc.freeze_account();
+            acc.try_freeze().ok();
         }
     //message has no code and data,
     //check bounce flag
