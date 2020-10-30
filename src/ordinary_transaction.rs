@@ -170,7 +170,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 log::debug!(target: "executor", 
                     "compute_phase: skipped reason {:?}", skipped.reason);
                 if is_ext_msg {
-                    fail!(ExecutorError::ExtMsgComputeSkipped(skipped.reason.clone()))
+                    fail!("inbound external message rejected by transaction")
                 }
                 gas_fees = Some(Default::default());
                 None

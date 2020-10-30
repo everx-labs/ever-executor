@@ -237,7 +237,6 @@ pub trait TransactionExecutor {
 
         let result = vm.execute();
         log::trace!(target: "executor", "execute result: {:?}", result);
-        let mut raw_exit_arg = None;
         match result {
             Err(err) => {
                 log::debug!(target: "executor", "VM terminated with exception: {}", err);
@@ -251,7 +250,6 @@ pub trait TransactionExecutor {
                     Err(_) | Ok(0) => None,
                     Ok(exit_arg) => Some(exit_arg)
                 };
-                raw_exit_arg = Some(exception.value);
             }
             Ok(exit_code) => vm_phase.exit_code = exit_code
         };
@@ -266,7 +264,7 @@ pub trait TransactionExecutor {
         vm_phase.gas_used = used.into();
         if credit != 0 {
             if is_external {
-                fail!(ExecutorError::NoAcceptError(vm_phase.exit_code, raw_exit_arg))
+                fail!(ExecutorError::NoAcceptError(vm_phase.exit_code))
             }
             vm_phase.gas_fees = Grams::zero();
         } else { // credit == 0 means contract accepted
