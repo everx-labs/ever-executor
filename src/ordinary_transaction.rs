@@ -170,7 +170,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 log::debug!(target: "executor", 
                     "compute_phase: skipped reason {:?}", skipped.reason);
                 if is_ext_msg {
-                    fail!("inbound external message rejected by transaction")
+                    fail!(ExecutorError::ExtMsgComputeSkipped(skipped.reason.clone()))
                 }
                 gas_fees = Some(Default::default());
                 None
@@ -210,7 +210,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         }
         log::debug!(target: "executor", "calculate Hash update");
         account.set_last_tr_time(last_tr_lt.load(Ordering::SeqCst));
-        *account_root = account.write_to_new_cell()?.into();
+        *account_root = account.serialize()?;
         let new_hash = account_root.repr_hash();
         tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
         tr.write_description(&TransactionDescr::Ordinary(description))?;
