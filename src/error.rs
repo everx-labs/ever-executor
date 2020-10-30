@@ -12,8 +12,10 @@
 */
 
 use ton_types::types::ExceptionCode;
+use ton_block::ComputeSkipReason;
+use ton_vm::stack::StackItem;
 
-#[derive(Debug, failure::Fail, Eq, PartialEq)]
+#[derive(Debug, failure::Fail, PartialEq)]
 pub enum ExecutorError {   
     #[fail(display = "Invalid external message")]
     InvalidExtMessage,
@@ -22,7 +24,9 @@ pub enum ExecutorError {
     #[fail(display = "VM Exception, code: {}", 0)]
     TvmExceptionCode(ExceptionCode),
     #[fail(display = "Contract did not accept message, exit code: {}", 0)]
-    NoAcceptError(i32),
+    NoAcceptError(i32, Option<StackItem>),
     #[fail(display = "Cannot pay for importing this external message")]
-    NoFundsToImportMsg
+    NoFundsToImportMsg,
+    #[fail(display = "Compute phase skipped while processing exteranl inbound messagewith reason {:?}", 0)]
+    ExtMsgComputeSkipped(ComputeSkipReason)
 }
