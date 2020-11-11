@@ -103,7 +103,7 @@ pub trait TransactionExecutor {
     ) -> Option<TrStoragePhase> {
         log::debug!(target: "executor", "storage_phase");
         if is_special {
-            log::debug!(target: "executor", "Spceial account: AccStatusChange::Unchanged");
+            log::debug!(target: "executor", "Special account: AccStatusChange::Unchanged");
             return Some(TrStoragePhase::with_params(Grams::zero(), None, AccStatusChange::Unchanged))
         }
         if acc == &Account::AccountNone {
@@ -436,11 +436,7 @@ pub trait TransactionExecutor {
         }
 
         for msg in out_msgs.iter_mut() {
-            if self.ordinary_transaction() {
-                msg.set_at_and_lt(tr.now(), lt.fetch_add(1, Ordering::SeqCst));
-            } else {
-                msg.set_at_and_lt(tr.now(), lt.load(Ordering::SeqCst));
-            }
+            msg.set_at_and_lt(tr.now(), lt.fetch_add(1, Ordering::SeqCst));
             tr.add_out_message(&msg).ok()?;
         }
         if let Some(ref fee) = phase.total_action_fees {
