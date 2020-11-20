@@ -37,4 +37,5 @@ log = "0.4.8"
 
 
 base64 = "0.10.0"
+ton_labs_assembler = { git = "https://github.com/tonlabs/ton-labs-assembler.git" }
 
