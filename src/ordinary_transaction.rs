@@ -17,7 +17,7 @@ use crate::{
     TransactionExecutor,
 };
 
-use std::{sync::{atomic::{AtomicU64, Ordering}, Arc}};
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 #[cfg(feature="timings")]
 use std::time::Instant;
 use ton_block::{
@@ -99,7 +99,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         log::debug!(target: "executor", "acc_balance: {}, credit_first: {}", acc_balance, credit_first);
 
         let is_special = self.config.is_special_account(account_address)?;
-        let lt = last_tr_lt.fetch_add(1, Ordering::SeqCst);
+        let lt = last_tr_lt.load(Ordering::Relaxed);
         let mut tr = Transaction::with_account_and_message(&account, &in_msg, lt)?;
         tr.set_now(block_unixtime);
         let mut description = TransactionDescrOrdinary::default();
@@ -151,15 +151,22 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         )?;
         let old_account = account.clone();
         let gas_fees;
+        let mut out_msgs = vec![];
         description.compute_ph = compute_ph;
         description.action = match description.compute_ph {
             TrComputePhase::Vm(ref phase) => {
                 tr.total_fees_mut().add(&CurrencyCollection::from_grams(phase.gas_fees.clone()))?;
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: success");
-                    log::debug!(target: "executor", "action_phase: lt={}", last_tr_lt.load(Ordering::SeqCst));
+                    log::debug!(target: "executor", "action_phase: lt={}", lt);
                     gas_fees = None;
-                    self.action_phase(&mut tr, &mut account, &mut msg_remaining_balance, actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
+                    match self.action_phase(&mut tr, &mut account, &mut msg_remaining_balance, actions.unwrap_or_default(), is_special) {
+                        Some((action_ph, msgs)) => {
+                            out_msgs = msgs;
+                            Some(action_ph)
+                        }
+                        None => None
+                    }
                 } else {
                     log::debug!(target: "executor", "compute_phase: failed");
                     gas_fees = Some(phase.gas_fees.clone());
@@ -202,14 +209,22 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if description.aborted {
             if let Some(gas_fees) = gas_fees {
                 log::debug!(target: "executor", "bounce_phase");
-                description.bounce = self.bounce_phase(&in_msg, &mut account, &mut tr, last_tr_lt.clone(), gas_fees);
+                description.bounce = match self.bounce_phase(&in_msg, &mut account, &mut tr, gas_fees) {
+                    Some((bounce_ph, Some(bounce_msg))) => {
+                        out_msgs.push(bounce_msg);
+                        Some(bounce_ph)
+                    }
+                    Some((bounce_ph, None)) => Some(bounce_ph),
+                    None => None
+                };
             }
             if description.bounce.is_none() {
                 account = old_account
             }
         }
         log::debug!(target: "executor", "calculate Hash update");
-        account.set_last_tr_time(last_tr_lt.load(Ordering::SeqCst));
+        let lt = self.add_messages(&mut tr, out_msgs, last_tr_lt)?;
+        account.set_last_tr_time(lt);
         *account_root = account.serialize()?;
         let new_hash = account_root.repr_hash();
         tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
