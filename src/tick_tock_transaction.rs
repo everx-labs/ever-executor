@@ -60,7 +60,6 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             fail!("Tick Tock transaction must not have input message")
         }
         let mut account = Account::construct_from(&mut account_root.clone().into())?;
-
         let account_id = match account.get_id() {
             Some(addr) => addr,
             None => fail!("Tick Tock contract should have Standard address")
@@ -71,14 +70,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             }
             None => fail!("Account {} is not special account for tick tock", account_id.to_hex_string())
         }
-
         let old_hash = account_root.repr_hash();
         let account_address = account.get_addr().cloned().unwrap_or_default();
         log::debug!(target: "executor", "tick tock transation account {}", account_id.to_hex_string());
         let is_special = true;
-        let lt = last_tr_lt.fetch_add(1, Ordering::SeqCst);
+        let lt = last_tr_lt.load(Ordering::Relaxed);
         let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
-        tr.set_logical_time(lt);
         tr.set_now(block_unixtime);
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();
@@ -100,6 +97,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             is_special,
             debug
         )?;
+        let mut out_msgs = vec![];
         description.compute_ph = compute_ph;
         description.action = match description.compute_ph {
             TrComputePhase::Vm(ref phase) => {
@@ -107,7 +105,13 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", last_tr_lt.load(Ordering::SeqCst));
-                    self.action_phase(&mut tr, &mut account, &mut Default::default(), actions.unwrap_or_default(), last_tr_lt.clone(), is_special)
+                    match self.action_phase(&mut tr, &mut account, &mut Default::default(), actions.unwrap_or_default(), is_special) {
+                        Some((action_ph, msgs)) => {
+                            out_msgs = msgs;
+                            Some(action_ph)
+                        }
+                        None => None
+                    }
                 } else {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
                     None
@@ -138,12 +142,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             account = old_account;
         }
         log::debug!(target: "executor", "calculate Hash update");
-        account.set_last_tr_time(last_tr_lt.load(Ordering::SeqCst));
+        let lt = self.add_messages(&mut tr, out_msgs, last_tr_lt)?;
+        account.set_last_tr_time(lt);
         *account_root = account.write_to_new_cell()?.into();
         let new_hash = account_root.repr_hash();
         tr.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
         tr.write_description(&TransactionDescr::TickTock(description))?;
-
         Ok(tr)
     }
     fn ordinary_transaction(&self) -> bool { false }

@@ -320,9 +320,8 @@ pub trait TransactionExecutor {
         acc: &mut Account,
         msg_remaining_balance: &mut CurrencyCollection,
         actions_cell: Cell,
-        lt: Arc<AtomicU64>,
         is_special: bool,
-    ) -> Option<TrActionPhase> {
+    ) -> Option<(TrActionPhase, Vec<Message>)> {
         let mut phase = TrActionPhase::default();
         let mut total_reserved_value = CurrencyCollection::default();
         let mut out_msgs = vec![];
@@ -335,7 +334,7 @@ pub trait TransactionExecutor {
                     err
                 );
                 phase.result_code = RESULT_CODE_ACTIONLIST_INVALID;
-                return Some(phase)
+                return Some((phase, out_msgs))
             }
             Ok(actions) => actions
         };
@@ -343,7 +342,7 @@ pub trait TransactionExecutor {
         if actions.len() > MAX_ACTIONS {
             log::debug!(target: "executor", "too many actions: {}", actions.len());
             phase.result_code = RESULT_CODE_TOO_MANY_ACTIONS;
-            return Some(phase);
+            return Some((phase, out_msgs))
         }
         phase.action_list_hash = actions.hash().ok()?;
         phase.tot_actions = actions.len() as i16;
@@ -413,7 +412,7 @@ pub trait TransactionExecutor {
                 if err_code == RESULT_CODE_NOT_ENOUGH_GRAMS || err_code == RESULT_CODE_NOT_ENOUGH_EXTRA {
                     phase.no_funds = true;
                 }
-                return Some(phase);
+                return Some((phase, vec![]));
             }
         }
 
@@ -435,17 +434,13 @@ pub trait TransactionExecutor {
             //TODO: some kind of check to freeze account.
         }
 
-        for msg in out_msgs.iter_mut() {
-            msg.set_at_and_lt(tr.now(), lt.fetch_add(1, Ordering::SeqCst));
-            tr.add_out_message(&msg).ok()?;
-        }
         if let Some(ref fee) = phase.total_action_fees {
             tr.total_fees_mut().grams.add(fee).ok()?;
         }
 
         phase.valid = true;
         phase.success = true;
-        Some(phase)
+        Some((phase, out_msgs))
     }
 
     /// Implementation of transaction's bounce phase.
@@ -459,9 +454,8 @@ pub trait TransactionExecutor {
         msg: &Message,
         acc: &mut Account,
         tr: &mut Transaction,
-        lt: Arc<AtomicU64>,
         gas_fee: Grams
-    ) -> Option<TrBouncePhase> {
+    ) -> Option<(TrBouncePhase, Option<Message>)> {
         let header = msg.int_header()?;
         if !header.bounce {
             return None
@@ -486,10 +480,10 @@ pub trait TransactionExecutor {
         let fwd_fees = Grams::from(fwd_full_fees.0 - fwd_mine_fees.0);
 
         if !header.value.grams.sub(&gas_fee).ok()? {
-            return Some(TrBouncePhase::no_funds(storage, fwd_full_fees))
+            return Some((TrBouncePhase::no_funds(storage, fwd_full_fees), None))
         }
         if header.value.grams.0 < fwd_full_fees.0 {
-            return Some(TrBouncePhase::no_funds(storage, fwd_full_fees))
+            return Some((TrBouncePhase::no_funds(storage, fwd_full_fees), None))
         }
         log::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees, header.value.grams);
         acc_sub_funds(acc, &header.value)?;
@@ -499,8 +493,6 @@ pub trait TransactionExecutor {
         header.bounced = true;
         header.ihr_fee = Grams::zero();
         header.fwd_fee = fwd_fees.clone();
-        header.created_lt = lt.fetch_add(1, Ordering::SeqCst);
-        header.created_at = tr.now().into();
 
         let mut bounce_msg = Message::with_int_header(header);
         if self.config().raw_config().has_capability(GlobalCapabilities::CapBounceMsgBody) {
@@ -511,11 +503,20 @@ pub trait TransactionExecutor {
             }
             bounce_msg.set_body(builder.into());
         }
-        tr.add_out_message(&bounce_msg)
-            .map_err(|err| log::error!(target: "executor", "cannot add bounce \
-                message to new transaction : {}", err)).ok()?;
         tr.total_fees_mut().grams.add(&fwd_mine_fees).ok()?;
-        Some(TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees))
+        Some((TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees), Some(bounce_msg)))
+    }
+
+    fn add_messages(&self, tr: &mut Transaction, out_msgs: Vec<Message>, lt: Arc<AtomicU64>) -> Result<u64> {
+        let mut lt = lt.fetch_add(1 + out_msgs.len() as u64, Ordering::Relaxed);
+        tr.set_logical_time(lt);
+        lt += 1;
+        for mut msg in out_msgs {
+            msg.set_at_and_lt(tr.now(), lt);
+            tr.add_out_message(&msg)?;
+            lt += 1;
+        }
+        Ok(lt)
     }
 }
 
