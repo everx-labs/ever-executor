@@ -176,11 +176,15 @@ pub trait TransactionExecutor {
     ) -> Result<(TrComputePhase, Option<Cell>)> {
         let mut vm_phase = TrComputePhaseVm::default();
         let is_masterchain;
-        let (msg_balance, is_external) = if let Some(ref msg) = msg {
+        let (msg_balance, is_external) = if let Some(msg) = msg {
             is_masterchain = msg.dst().map(|addr| addr.is_masterchain()).unwrap_or_default();
             if let Some(header) = msg.int_header() {
                 log::debug!(target: "executor", "msg internal");
-                if acc == &Account::AccountNone && create_account_state(acc, msg, header.bounce, smc_info.unix_time()) {
+                if acc.is_none() {
+                    if let Some(new_acc) = Account::from_message(msg) {
+                        *acc = new_acc;
+                        acc.set_last_paid(smc_info.unix_time())
+                    }
                 }
                 (header.value.grams.0, false)
             } else {
@@ -577,41 +581,6 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipR
             Some(ComputeSkipReason::NoState)
         }
     }
-}
-
-fn create_account_state(acc: &mut Account, in_msg: &Message, bounce: bool, now: u32) -> bool {
-    log::debug!(target: "executor", "create_account_state");
-    //try to create account with constructor message
-    if let Ok(new_acc) = Account::with_message(in_msg) {
-        //account created from constructor message
-        //but check that inbound message bear some value,
-        //otherwise it will be frozen
-        *acc = new_acc;
-        if in_msg.get_value().is_some() {
-            log::debug!(target: "executor", "new acc is created");
-            acc.set_last_paid(now);
-            //it's ok - active account will be created.
-            //set apropriate flags in phase.
-            //return activated account
-            return true
-        } else {
-            log::debug!(target: "executor", "new acc is created and frozen");
-            acc.try_freeze().ok();
-        }
-    //message has no code and data,
-    //check bounce flag
-    } else if bounce {
-        log::debug!(target: "executor", "bounce message to non-existing account");
-        //let skip computing phase, because account not exist and bounce flag is setted. 
-        //Account will not be created, return AccountNone
-    } else if let Some(balance) = in_msg.get_value() {
-        //value-bearing message with no bounce: create uninitialized account
-        log::debug!(target: "executor", "new uninitialized acc is created");
-        let address = in_msg.dst().unwrap_or_default();
-        *acc = Account::with_address_and_ballance(&address, balance);
-        acc.set_last_paid(now);
-    }
-    false
 }
 
 fn outmsg_action_handler(
