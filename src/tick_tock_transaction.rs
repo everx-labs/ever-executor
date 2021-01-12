@@ -104,7 +104,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 tr.total_fees_mut().add(&CurrencyCollection::from_grams(phase.gas_fees.clone()))?;
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
-                    log::debug!(target: "executor", "action_phase {}", last_tr_lt.load(Ordering::SeqCst));
+                    log::debug!(target: "executor", "action_phase {}", lt);
                     match self.action_phase(&mut tr, &mut account, &mut Default::default(), actions.unwrap_or_default(), is_special) {
                         Some((action_ph, msgs)) => {
                             out_msgs = msgs;
