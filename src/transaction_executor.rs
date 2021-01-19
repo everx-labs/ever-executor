@@ -472,8 +472,7 @@ pub trait TransactionExecutor {
             Some(addr) => addr
         };
         let is_masterchain = msg_src.is_masterchain() || header.dst.is_masterchain();
-        let fwd_prices = self.config().raw_config().fwd_prices(is_masterchain)
-            .map_err(|err| log::error!(target: "executor", "cannot load fwd_prices from config : {}", err)).ok()?;
+        let fwd_prices = self.config().get_fwd_prices(is_masterchain);
 
         let mut header = header.clone();
         let msg_dst = std::mem::replace(&mut header.dst, msg_src);
@@ -499,7 +498,7 @@ pub trait TransactionExecutor {
         header.fwd_fee = fwd_fees.clone();
 
         let mut bounce_msg = Message::with_int_header(header);
-        if self.config().raw_config().has_capability(GlobalCapabilities::CapBounceMsgBody) {
+        if self.config().has_capability(GlobalCapabilities::CapBounceMsgBody) {
             let mut builder = (-1i32).write_to_new_cell().ok()?;
             if let Some(mut body) = msg.body() {
                 body.shrink_data(0..256);

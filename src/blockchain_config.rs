@@ -14,7 +14,7 @@
 use ton_block::{
     Grams,
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
-    GasLimitsPrices, MsgAddressInt, 
+    GasLimitsPrices, GlobalCapabilities, MsgAddressInt, 
     MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
 };
 use ton_types::{AccountId, Cell, Result};
@@ -208,6 +208,8 @@ pub struct BlockchainConfig {
 
     special_contracts: FundamentalSmcAddresses,
 
+    capabilities: u64,
+
     raw_config: ConfigParams,
 }
 
@@ -221,6 +223,7 @@ impl Default for BlockchainConfig {
             storage_prices: AccStoragePrices::default(),
             special_contracts: Self::get_default_special_contracts(),
             raw_config: Self::get_defult_raw_config(),
+            capabilities: 0x2e,
         }
     }
 }
@@ -254,6 +257,8 @@ impl BlockchainConfig {
             storage_prices: AccStoragePrices::with_config(&config.storage_prices()?)?,
 
             special_contracts: config.fundamental_smc_addr()?,
+
+            capabilities: config.capabilities(),
 
             raw_config: config,
         })
@@ -311,5 +316,9 @@ impl BlockchainConfig {
 
     pub fn raw_config(&self) -> &ConfigParams {
         &self.raw_config
+    }
+
+    pub fn has_capability(&self, capability: GlobalCapabilities) -> bool {
+        (self.capabilities & (capability as u64)) != 0
     }
 }
