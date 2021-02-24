@@ -17,7 +17,7 @@ use ton_block::{
     GasLimitsPrices, GlobalCapabilities, MsgAddressInt, 
     MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
 };
-use ton_types::{AccountId, Cell, Result};
+use ton_types::{UInt256, Cell, Result};
 
 pub trait TONDefaultConfig {
     /// Get default value for masterchain
@@ -231,9 +231,9 @@ impl Default for BlockchainConfig {
 impl BlockchainConfig {
     fn get_default_special_contracts() -> FundamentalSmcAddresses {
         let mut map = FundamentalSmcAddresses::default();
-        map.add_key(&AccountId::from([0x33u8; 32])).unwrap();
-        map.add_key(&AccountId::from([0x66u8; 32])).unwrap();
-        map.add_key(&AccountId::from_string(
+        map.add_key(&UInt256::with_array([0x33u8; 32])).unwrap();
+        map.add_key(&UInt256::with_array([0x66u8; 32])).unwrap();
+        map.add_key(&UInt256::from_str(
             "34517C7BDF5187C55AF4F8B61FDC321588C7AB768DEE24B006DF29106458D7CF"
         ).unwrap()).unwrap();
         map
