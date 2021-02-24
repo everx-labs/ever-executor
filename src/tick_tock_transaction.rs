@@ -60,7 +60,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             fail!("Tick Tock transaction must not have input message")
         }
         let mut account = Account::construct_from(&mut account_root.clone().into())?;
-        let account_id = match account.get_id() {
+        let account_addr = match account.get_id() {
             Some(addr) => addr,
             None => fail!("Tick Tock contract should have Standard address")
         };
@@ -68,14 +68,14 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             Some(tt) => if tt.tock != self.tt.is_tock() && tt.tick != self.tt.is_tick() {
                 fail!("wrong type of account's tick tock flag")
             }
-            None => fail!("Account {} is not special account for tick tock", account_id.to_hex_string())
+            None => fail!("Account {:x} is not special account for tick tock", account_addr)
         }
         let old_hash = account_root.repr_hash();
         let account_address = account.get_addr().cloned().unwrap_or_default();
-        log::debug!(target: "executor", "tick tock transation account {}", account_id.to_hex_string());
+        log::debug!(target: "executor", "tick tock transation account {:x}", account_addr);
         let is_special = true;
         let lt = last_tr_lt.load(Ordering::Relaxed);
-        let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
+        let mut tr = Transaction::with_address_and_status(account_addr.clone(), account.status());
         tr.set_now(block_unixtime);
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();

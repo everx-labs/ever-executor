@@ -106,7 +106,7 @@ pub trait TransactionExecutor {
             log::debug!(target: "executor", "Special account: AccStatusChange::Unchanged");
             return Some(TrStoragePhase::with_params(Grams::zero(), None, AccStatusChange::Unchanged))
         }
-        if acc == &Account::AccountNone {
+        if acc.is_none() {
             log::debug!(target: "executor", "Account::None");
             return Some(TrStoragePhase::with_params(Grams::default(), None, AccStatusChange::Unchanged))
         }
@@ -149,8 +149,8 @@ pub trait TransactionExecutor {
     fn credit_phase(&self, msg: &Message, acc: &mut Account) -> Option<TrCreditPhase> {
         log::debug!(target: "executor", "credit_phase");
         let header = msg.int_header()?;
-        if acc == &Account::AccountNone {
-            log::debug!(target: "executor", "Account::AccountNone");
+        if acc.is_none() {
+            log::debug!(target: "executor", "Account in AccountNone");
             if !header.value.grams.is_zero() {
                 return Some(TrCreditPhase::with_params(None, header.value.clone()))
             }
@@ -192,7 +192,7 @@ pub trait TransactionExecutor {
                 (0, true)
             }
         } else {
-            debug_assert!(acc != &Account::AccountNone);
+            debug_assert!(!acc.is_none());
             is_masterchain = acc.get_addr().map(|addr| addr.is_masterchain()).unwrap_or_default();
             (0, false)
         };
