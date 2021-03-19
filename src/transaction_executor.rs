@@ -26,7 +26,7 @@ use ton_block::{
     SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
     AccStatusChange, ComputeSkipReason, Transaction,
-    TrActionPhase, TrBouncePhase, TrComputePhase, TrComputePhaseVm, TrCreditPhase, TrStoragePhase,
+    TrActionPhase, TrBouncePhase, TrComputePhase, TrComputePhaseVm, TrCreditPhase, TrStoragePhase, HashUpdate,
 };
 use ton_types::{error, fail, ExceptionCode, Cell, Result, HashmapE, HashmapType, IBitstring, UInt256};
 use ton_vm::{
@@ -48,6 +48,17 @@ const MAX_ACTIONS: usize = 255;
 
 
 pub trait TransactionExecutor {
+    fn execute_for_account(
+        &self,
+        in_msg: Option<&Message>,
+        account: &mut Account,
+        state_libs: HashmapE, // masterchain libraries
+        block_unixtime: u32,
+        block_lt: u64,
+        last_tr_lt: Arc<AtomicU64>,
+        debug: bool
+    ) -> Result<Transaction>;
+
     fn execute_with_libs(
         &self,
         in_msg: Option<&Message>,
@@ -57,7 +68,23 @@ pub trait TransactionExecutor {
         block_lt: u64,
         last_tr_lt: Arc<AtomicU64>,
         debug: bool
-    ) -> Result<Transaction>;
+    ) -> Result<Transaction> {
+        let old_hash = account_root.repr_hash();
+        let mut account = Account::construct_from_cell(account_root.clone())?;
+        let mut transaction = self.execute_for_account(
+            in_msg,
+            &mut account,
+            state_libs,
+            block_unixtime,
+            block_lt,
+            last_tr_lt,
+            debug
+        )?;
+        *account_root = account.serialize()?;
+        let new_hash = account_root.repr_hash();
+        transaction.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
+        Ok(transaction)
+    }
 
     fn execute(
         &self,
@@ -122,20 +149,20 @@ pub trait TransactionExecutor {
 
         let balance = acc.get_balance()?.grams.clone();
         if balance >= fee {
+            log::debug!(target: "executor", "storage fee: {}", fee);
+            tr.add_fee_grams(&fee).ok()?;
             let fee = CurrencyCollection::from_grams(fee);
-            log::debug!(target: "executor", "storage fee: {}", fee.grams);
             acc_sub_funds(acc, &fee)?;
-            tr.total_fees_mut().add(&fee).ok()?;
             log::debug!(target: "executor", "AccStatusChange::Unchanged");
             acc.set_last_paid(tr.now());
             Some(TrStoragePhase::with_params(fee.grams, None, AccStatusChange::Unchanged))
         } else {
             fee.sub(&balance).ok()?;
+            log::debug!(target: "executor", "storage fee: {}", balance);
+            tr.add_fee_grams(&balance).ok()?;
             let balance = CurrencyCollection::from_grams(balance);
-            log::debug!(target: "executor", "storage fee: {}", balance.grams);
             acc_sub_funds(acc, &balance)?;
             acc.try_freeze().ok()?;
-            tr.total_fees_mut().add(&balance).ok()?;
             log::debug!(target: "executor", "AccStatusChange::Frozen");
             acc.set_last_paid(tr.now());
             Some(TrStoragePhase::with_params(balance.grams, Some(fee), AccStatusChange::Frozen))
@@ -439,7 +466,7 @@ pub trait TransactionExecutor {
         }
 
         if let Some(ref fee) = phase.total_action_fees {
-            tr.total_fees_mut().grams.add(fee).ok()?;
+            tr.add_fee_grams(fee).ok()?;
         }
 
         phase.valid = true;
@@ -506,7 +533,7 @@ pub trait TransactionExecutor {
             }
             bounce_msg.set_body(builder.into());
         }
-        tr.total_fees_mut().grams.add(&fwd_mine_fees).ok()?;
+        tr.add_fee_grams(&fwd_mine_fees).ok()?;
         Some((TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees), Some(bounce_msg)))
     }
 
@@ -625,7 +652,7 @@ fn outmsg_action_handler(
     if let Some(int_header) = msg.int_header_mut() {
         result_value = int_header.value.clone();
         if int_header.ihr_disabled {
-            int_header.ihr_fee = Default::default();
+            int_header.ihr_fee = Grams::default();
         } else {
             let compute_ihr_fee = fwd_prices.ihr_fee(&compute_fwd_fee);
             if int_header.ihr_fee < compute_ihr_fee {
@@ -648,7 +675,7 @@ fn outmsg_action_handler(
             //send all remainig balance of inbound message
             result_value.add(msg_balance).ok();
             int_header.value.add(msg_balance).ok();
-            *msg_balance = Default::default();
+            *msg_balance = CurrencyCollection::default();
         }
         if (mode & SENDMSG_PAY_FEE_SEPARATELY) != 0 {
             //we must pay the fees, sum them with msg value

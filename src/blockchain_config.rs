@@ -63,7 +63,8 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// `fwd_fee = (lump_price + ceil((bit_price * msg.bits + cell_price * msg.cells)/2^16))`.
     /// `msg.bits` and `msg.cells` are calculated from message represented as tree of cells. Root cell is not counted.
     fn fwd_fee(&self, msg_cell: &Cell) -> (StorageUsedShort, Grams) {
-        let mut storage = StorageUsedShort::calculate_for_cell(msg_cell);
+        let mut storage = StorageUsedShort::default();
+        storage.append(msg_cell);
         storage.cells.0 -= 1;
         storage.bits.0 -= msg_cell.bit_length() as u64;
         let cells = u128::from(storage.cells.0);
