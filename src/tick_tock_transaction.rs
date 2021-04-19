@@ -86,12 +86,18 @@ impl TransactionExecutor for TickTockTransactionExecutor {
 
         log::debug!(target: "executor", "compute_phase {}", lt);
         let smci = self.build_contract_info(self.config().raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
+        let mut stack = Stack::new();
+        stack
+            .push(int!(account.balance().map(|value| value.grams.0).unwrap_or_default()))
+            .push(int!(account_addr.get_bigint(256)))
+            .push(boolean!(self.tt.is_tock()))
+            .push(int!(-2));
         let (compute_ph, actions) = self.compute_phase(
             None, 
             account,
             state_libs,
             &smci, 
-            self,
+            stack,
             is_special,
             debug
         )?;
@@ -147,7 +153,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     fn ordinary_transaction(&self) -> bool { false }
     fn config(&self) -> &BlockchainConfig { &self.config }
     fn build_stack(&self, _in_msg: Option<&Message>, account: &Account) -> Stack {
-        let account_balance = account.get_balance().map(|balance| balance.grams.clone()).unwrap_or_default();
+        let account_balance = account.balance().map(|balance| balance.grams.clone()).unwrap_or_default();
         let account_id = account.get_id().unwrap_or_default();
         let mut stack = Stack::new();
         stack
