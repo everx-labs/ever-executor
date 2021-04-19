@@ -22,12 +22,11 @@ use std::time::Instant;
 use ton_block::{
     Grams, CurrencyCollection, Serializable,
     Account, AccStatusChange, CommonMsgInfo, Message,
-    Transaction, TransactionDescrOrdinary, TransactionDescr,
-    TrComputePhase,
+    Transaction, TransactionDescrOrdinary, TransactionDescr, TrComputePhase,
 };
 use ton_types::{error, fail, Result, HashmapE};
 use ton_vm::{
-    int, stack::{Stack, StackItem, integer::IntegerData}
+    boolean, int, stack::{Stack, StackItem, integer::IntegerData}
 };
 
 
@@ -70,29 +69,25 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         #[cfg(feature="timings")]
         let mut now = Instant::now();
 
-        let in_msg = match in_msg {
-            Some(in_msg) => in_msg,
-            None => fail!("Ordinary transaction must have input message")
-        };
-        log::debug!(target: "executor", "Ordinary transaction executing, in message id: {:x}",
-            in_msg.get_int_src_account_id().unwrap_or_default());
-        
+        let in_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
+        let msg_cell = in_msg.serialize()?; // TODO: get from outside
+        log::debug!(target: "executor", "Ordinary transaction executing, in message id: {:x}", msg_cell.repr_hash());
         let (credit_first, is_ext_msg) = match in_msg.header() {
             CommonMsgInfo::ExtOutMsgInfo(_) => fail!(ExecutorError::InvalidExtMessage),
             CommonMsgInfo::IntMsgInfo(ref hdr) => (!hdr.bounce, false),
             CommonMsgInfo::ExtInMsgInfo(_) => (true, true)
         };
 
-        let account_address = &in_msg.dst()
-            .ok_or_else(|| ExecutorError::TrExecutorError("Input message has no dst address".to_string()))?;
+        let account_address = in_msg.dst_ref().ok_or_else(|| ExecutorError::TrExecutorError(
+            format!("Input message {:x} has no dst address", msg_cell.repr_hash())
+        ))?;
         match account.get_id() {
             Some(account_id) => log::debug!(target: "executor", "Account = {:x}", account_id),
-            None => log::debug!(target: "executor",
-                "Account = None, msg address = {:x}", in_msg.int_dst_account_id().unwrap_or_default())
+            None => log::debug!(target: "executor", "Account = None, address = {}", account_address)
         }
 
-        let acc_balance = account.get_balance().map(|value| value.grams.0).unwrap_or_default();
-        log::debug!(target: "executor", "acc_balance: {}, credit_first: {}", acc_balance, credit_first);
+        let acc_balance = account.balance().cloned().unwrap_or_default();
+        log::debug!(target: "executor", "acc_balance: {}, credit_first: {}", acc_balance.grams, credit_first);
 
         let is_special = self.config.is_special_account(account_address)?;
         let lt = last_tr_lt.load(Ordering::Relaxed);
@@ -106,9 +101,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
-            let (_, in_fwd_fee) = self.config.get_fwd_prices(in_msg.is_masterchain()).fwd_fee(&in_msg.serialize()?);
+            let in_fwd_fee = self.config.get_fwd_prices(in_msg.is_masterchain()).fwd_fee(&in_msg.serialize()?);
             let in_fwd_fee = CurrencyCollection::from_grams(in_fwd_fee);
-            log::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee.grams, acc_balance);
+            log::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee.grams, acc_balance.grams);
             if !account.sub_funds(&in_fwd_fee)? {
                 fail!(ExecutorError::NoFundsToImportMsg)
             }
@@ -135,12 +130,20 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         let smci = self.build_contract_info(self.config.raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
         log::debug!(target: "executor", "compute_phase");
+        let mut stack = Stack::new();
+        stack
+            .push(int!(acc_balance.grams.0))
+            .push(int!(msg_remaining_balance.grams.0))
+            .push(StackItem::Cell(msg_cell))
+            .push(StackItem::Slice(in_msg.body().unwrap_or_default()))
+            .push(boolean!(is_ext_msg));
+        
         let (compute_ph, actions) = self.compute_phase(
             Some(&in_msg), 
             account,
             state_libs,
             &smci,
-            self,
+            stack,
             is_special,
             debug
         )?;
@@ -234,15 +237,10 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             Some(in_msg) => in_msg,
             None => return stack
         };
-        let account_balance = int!(account.get_balance().map(|value| value.grams.0.clone()).unwrap_or_default());
+        let account_balance = int!(account.balance().map(|value| value.grams.0.clone()).unwrap_or_default());
         let msg_balance = int!(in_msg.get_value().map(|val| val.grams.0).unwrap_or_default());
-        let function_selector = match in_msg.header() {
-            CommonMsgInfo::IntMsgInfo(_) => int!(0),
-            _ => int!(-1),
-        };
-
+        let function_selector = boolean!(in_msg.is_inbound_external());
         let body_slice = in_msg.body().unwrap_or_default();
-
         let msg_cell = in_msg.serialize().unwrap_or_default();
         stack
             .push(account_balance)
