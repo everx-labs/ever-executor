@@ -307,7 +307,7 @@ impl BlockchainConfig {
             // config account is special too
             Ok(
                 self.raw_config.config_addr == account_id ||
-                self.special_contracts.check_key(&account_id)?
+                self.special_contracts.get_raw(account_id)?.is_some()
             )
 
         } else {

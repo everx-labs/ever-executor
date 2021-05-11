@@ -19,9 +19,9 @@ use crate::{
 
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
-    CurrencyCollection, TransactionTickTock,
+    AddSub, Grams, CurrencyCollection, TransactionTickTock,
     Account, Message,
-    Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr
+    Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr, AccStatusChange, TrStoragePhase
 };
 use ton_types::{fail, HashmapE, Result};
 use ton_vm::{
@@ -59,7 +59,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         if in_msg.is_some() {
             fail!("Tick Tock transaction must not have input message")
         }
-        let account_addr = match account.get_id() {
+        let account_id = match account.get_id() {
             Some(addr) => addr,
             None => fail!("Tick Tock contract should have Standard address")
         };
@@ -67,20 +67,47 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             Some(tt) => if tt.tock != self.tt.is_tock() && tt.tick != self.tt.is_tick() {
                 fail!("wrong type of account's tick tock flag")
             }
-            None => fail!("Account {:x} is not special account for tick tock", account_addr)
+            None => fail!("Account {:x} is not special account for tick tock", account_id)
         }
         let account_address = account.get_addr().cloned().unwrap_or_default();
-        log::debug!(target: "executor", "tick tock transation account {:x}", account_addr);
+        log::debug!(target: "executor", "tick tock transation account {:x}", account_id);
+        let mut acc_balance = account.balance().cloned().unwrap_or_default();
+
+        let is_masterchain = true;
         let is_special = true;
         let lt = last_tr_lt.load(Ordering::Relaxed);
-        let mut tr = Transaction::with_address_and_status(account_addr.clone(), account.status());
+        let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
         tr.set_now(block_unixtime);
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();
 
-        description.storage = match self.storage_phase(account, &mut tr, is_special) {
-            Some(storage_ph) => storage_ph,
-            None => fail!("Problem with storage phase")
+        let (storage_collected_fee, due_payment) = self.storage_phase(
+            account,
+            &mut acc_balance,
+            &mut tr,
+            is_masterchain,
+            is_special,
+        )?;
+        description.storage = if let Some(mut due_payment) = due_payment {
+            if acc_balance.grams >= due_payment {
+                acc_balance.grams.sub(&due_payment)?;
+                account.set_due_payment(None);
+                TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Unchanged)
+            } else {
+                due_payment.sub(&acc_balance.grams)?;
+                acc_balance.grams = Grams::default();
+                if due_payment > self.config.get_gas_config(is_masterchain).freeze_due_limit.into() {
+                    account.set_due_payment(Some(due_payment.clone()));
+                    account.try_freeze()?;
+                    TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Frozen)
+                } else {
+                account.set_due_payment(None);
+                    TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Unchanged)
+                }
+            }
+        } else {
+            account.set_due_payment(None);
+            TrStoragePhase::with_params(storage_collected_fee, None, AccStatusChange::Unchanged)
         };
         let old_account = account.clone();
 
@@ -89,15 +116,18 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut stack = Stack::new();
         stack
             .push(int!(account.balance().map(|value| value.grams.0).unwrap_or_default()))
-            .push(int!(account_addr.get_bigint(256)))
+            .push(int!(account_id.get_bigint(256)))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
         let (compute_ph, actions) = self.compute_phase(
             None, 
             account,
+            &mut acc_balance,
+            &CurrencyCollection::default(),
             state_libs,
             &smci, 
             stack,
+            is_masterchain,
             is_special,
             debug
         )?;
@@ -109,7 +139,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", lt);
-                    match self.action_phase(&mut tr, account, &mut CurrencyCollection::default(), actions.unwrap_or_default(), is_special) {
+                    match self.action_phase(&mut tr, account, &mut acc_balance, &mut CurrencyCollection::default(), actions.unwrap_or_default(), is_special) {
                         Some((action_ph, msgs)) => {
                             out_msgs = msgs;
                             Some(action_ph)
@@ -142,6 +172,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
         tr.set_end_status(account.status());
+        account.set_balance(acc_balance);
         if description.aborted {
             *account = old_account;
         }
@@ -153,12 +184,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     fn ordinary_transaction(&self) -> bool { false }
     fn config(&self) -> &BlockchainConfig { &self.config }
     fn build_stack(&self, _in_msg: Option<&Message>, account: &Account) -> Stack {
-        let account_balance = account.balance().map(|balance| balance.grams.clone()).unwrap_or_default();
-        let account_id = account.get_id().unwrap_or_default();
+        let account_balance = account.balance().map(|balance| balance.grams.clone()).unwrap();
+        let account_id = account.get_id().unwrap();
         let mut stack = Stack::new();
         stack
             .push(int!(account_balance.0.clone()))
-            .push(int!(account_id.clone().get_bigint(256)))
+            .push(int!(account_id.get_bigint(256)))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
         stack
