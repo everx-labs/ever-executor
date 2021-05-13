@@ -19,13 +19,13 @@ use crate::{
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
     Deserializable, GetRepresentationHash, Serializable,
-    Account, AccountState, ConfigParams, GasLimitsPrices, GlobalCapabilities,
+    Account, AccountStatus, AccStatusChange, ConfigParams, GasLimitsPrices, GlobalCapabilities,
     AddSub, CurrencyCollection, Grams,
     Message, MsgAddressInt,
     OutAction, OutActions, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_VALID_MODES,
     SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
-    AccStatusChange, ComputeSkipReason, Transaction, StorageUsedShort,
+    ComputeSkipReason, Transaction, StorageUsedShort,
     TrActionPhase, TrBouncePhase, TrComputePhase, TrCreditPhase, TrComputePhaseVm, HashUpdate,
 };
 use ton_types::{error, fail, ExceptionCode, Cell, Result, HashmapE, HashmapType, IBitstring, UInt256};
@@ -98,17 +98,14 @@ pub trait TransactionExecutor {
         self.execute_with_libs(in_msg, account_root, HashmapE::default(), block_unixtime, block_lt, last_tr_lt, debug)
     }
 
-    fn build_contract_info(&self, config_params: &ConfigParams, acc: &Account, acc_address: &MsgAddressInt, block_unixtime: u32, block_lt: u64, tr_lt: u64) -> SmartContractInfo {
+    fn build_contract_info(&self, acc_balance: &CurrencyCollection, acc_address: &MsgAddressInt, block_unixtime: u32, block_lt: u64, tr_lt: u64) -> SmartContractInfo {
         let mut info = SmartContractInfo::with_myself(acc_address.serialize().unwrap_or_default().into());
         *info.block_lt_mut() = block_lt;
         *info.trans_lt_mut() = tr_lt;
         *info.unix_time_mut() = block_unixtime;
-        if let Some(balance) = acc.balance() {
-            // info.set_remaining_balance(balance.grams.0, balance.other.clone());
-            *info.balance_remaining_grams_mut() = balance.grams.0;
-            *info.balance_remaining_other_mut() = balance.other_as_hashmap();
-        }
-        if let Some(data) = config_params.config_params.data() {
+        *info.balance_remaining_grams_mut() = acc_balance.grams.0;
+        *info.balance_remaining_other_mut() = acc_balance.other_as_hashmap();
+        if let Some(data) = self.config().raw_config().config_params.data() {
             info.set_config_params(data.clone());
         }
         info
@@ -187,7 +184,7 @@ pub trait TransactionExecutor {
         acc: &mut Account,
         acc_balance: &mut CurrencyCollection,
         msg_balance: &CurrencyCollection,
-        state_libs: HashmapE, // masgerchain libraries
+        state_libs: HashmapE, // masterchain libraries
         smc_info: &SmartContractInfo, 
         stack: Stack,
         is_masterchain: bool,
@@ -544,18 +541,18 @@ pub trait TransactionExecutor {
 /// Returns computed initial phase.
 fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipReason> {
     log::debug!(target: "executor", "compute_account_state");
-    match acc.state() {
-        None => {
+    match acc.status() {
+        AccountStatus::AccStateNonexist => {
             log::error!(target: "executor", "account must exist");
             Some(ComputeSkipReason::BadState)
         }
         //Account exists, but can be in different states.
-        Some(AccountState::AccountActive(_)) => {
+        AccountStatus::AccStateActive => {
             //account is active, just return it
             log::debug!(target: "executor", "account state: AccountActive");
             None
         }
-        Some(AccountState::AccountUninit) => {
+        AccountStatus::AccStateUninit => {
             log::debug!(target: "executor", "AccountUninit");
             if let Some(state_init) = in_msg.state_init() {
                 // if msg is a constructor message then
@@ -573,7 +570,7 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipR
                 Some(ComputeSkipReason::NoState)
             }
         }
-        Some(AccountState::AccountFrozen(_)) => {
+        AccountStatus::AccStateFrozen => {
             log::debug!(target: "executor", "AccountFrozen");
             //account balance was credited and if it positive after that
             //and inbound message bear code and data then make some check and unfreeze account
