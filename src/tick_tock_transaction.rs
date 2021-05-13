@@ -112,7 +112,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let old_account = account.clone();
 
         log::debug!(target: "executor", "compute_phase {}", lt);
-        let smci = self.build_contract_info(self.config().raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
+        let smci = self.build_contract_info(&acc_balance, &account_address, block_unixtime, block_lt, lt); 
         let mut stack = Stack::new();
         stack
             .push(int!(account.balance().map(|value| value.grams.0).unwrap_or_default()))

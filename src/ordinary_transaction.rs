@@ -178,7 +178,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             now = Instant::now();
         }
 
-        let smci = self.build_contract_info(self.config.raw_config(), &account, &account_address, block_unixtime, block_lt, lt); 
+        let smci = self.build_contract_info(&acc_balance, &account_address, block_unixtime, block_lt, lt); 
         let mut stack = Stack::new();
         stack
             .push(int!(acc_balance.grams.0))

@@ -84,6 +84,30 @@ impl VMSetup {
 
     /// Creates new instance of TVM with defined stack, registers and code.
     pub fn create(self) -> Engine {
+        if cfg!(debug_assertions) {
+            // account balance is duplicated in stack and in c7 - so check
+            let balance_in_smc = self
+                .ctrls
+                .get(7)
+                .unwrap()
+                .as_tuple()
+                .unwrap()[0]
+                .as_tuple()
+                .unwrap()[7]
+                .as_tuple()
+                .unwrap()[0]
+                .as_integer()
+                .unwrap();
+            let stack_depth = self.stack.as_ref().unwrap().depth();
+            let balance_in_stack = self
+                .stack
+                .as_ref()
+                .unwrap()
+                .get(stack_depth - 1)
+                .as_integer()
+                .unwrap();
+            assert_eq!(balance_in_smc, balance_in_stack);
+        }
         self.vm.setup_with_libraries(self.code, Some(self.ctrls), self.stack, self.gas, self.libraries)
     }
 }
