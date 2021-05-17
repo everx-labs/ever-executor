@@ -19,14 +19,14 @@ use crate::{
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
     Deserializable, GetRepresentationHash, Serializable,
-    Account, AccountStatus, AccStatusChange, ConfigParams, GasLimitsPrices, GlobalCapabilities,
+    Account, AccountStatus, AccStatusChange, GasLimitsPrices, GlobalCapabilities,
     AddSub, CurrencyCollection, Grams,
     Message, MsgAddressInt,
     OutAction, OutActions, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_VALID_MODES,
     SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
     ComputeSkipReason, Transaction, StorageUsedShort,
-    TrActionPhase, TrBouncePhase, TrComputePhase, TrCreditPhase, TrComputePhaseVm, HashUpdate,
+    TrActionPhase, TrBouncePhase, TrComputePhase, TrStoragePhase, TrCreditPhase, TrComputePhaseVm, HashUpdate,
 };
 use ton_types::{error, fail, ExceptionCode, Cell, Result, HashmapE, HashmapType, IBitstring, UInt256};
 use ton_vm::{
@@ -122,42 +122,48 @@ pub trait TransactionExecutor {
     /// If account balance becomes negative after that, then account is frozen.
     fn storage_phase(
         &self,
-        acc: &Account,
+        acc: &mut Account,
         acc_balance: &mut CurrencyCollection,
         tr: &mut Transaction,
         is_masterchain: bool,
         is_special: bool
-    ) -> Result<(Grams, Option<Grams>)> {
+    ) -> Option<TrStoragePhase> {
         log::debug!(target: "executor", "storage_phase");
         if is_special {
             log::debug!(target: "executor", "Special account: AccStatusChange::Unchanged");
-            return Ok((Grams::default(), None))
+            return Some(TrStoragePhase::with_params(Grams::default(), None, AccStatusChange::Unchanged))
         }
         if acc.is_none() {
             log::debug!(target: "executor", "Account::None");
-            return Ok((Grams::default(), None))
+            return Some(TrStoragePhase::with_params(Grams::default(), None, AccStatusChange::Unchanged))
         }
 
         let mut fee = Grams::from(self.config().calc_storage_fee(
-            acc.storage_info().ok_or_else(|| error!("Account in None"))?,
+            acc.storage_info()?,
             is_masterchain,
             tr.now(),
         ));
         if let Some(due_payment) = acc.due_payment() {
-            fee.add(&due_payment)?;
+            fee.add(&due_payment).ok()?;
         }
 
         if acc_balance.grams >= fee {
             log::debug!(target: "executor", "acc_balance: {}, storage fee: {}", acc_balance.grams, fee);
-            acc_balance.grams.sub(&fee)?;
-            tr.add_fee_grams(&fee)?;
-            Ok((fee, None))
+            acc_balance.grams.sub(&fee).ok()?;
+            tr.add_fee_grams(&fee).ok()?;
+            Some(TrStoragePhase::with_params(fee, None, AccStatusChange::Unchanged))
         } else {
             log::debug!(target: "executor", "acc_balance: {} is storage fee from total: {}", acc_balance.grams, fee);
             let storage_fees_collected = std::mem::replace(&mut acc_balance.grams, Grams::default());
-            tr.add_fee_grams(&storage_fees_collected)?;
-            fee.sub(&storage_fees_collected)?;
-            Ok((storage_fees_collected, Some(fee)))
+            tr.add_fee_grams(&storage_fees_collected).ok()?;
+            fee.sub(&storage_fees_collected).ok()?;
+            if fee.0 > self.config().get_gas_config(is_masterchain).freeze_due_limit.into() {
+                log::debug!(target: "executor", "freeze account");
+                acc.try_freeze().unwrap();
+                Some(TrStoragePhase::with_params(storage_fees_collected, Some(fee), AccStatusChange::Frozen))
+            } else {
+                Some(TrStoragePhase::with_params(storage_fees_collected, Some(fee), AccStatusChange::Unchanged))
+            }
         }
     }
 
