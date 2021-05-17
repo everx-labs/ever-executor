@@ -19,11 +19,11 @@ use crate::{
 
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
-    AddSub, Grams, CurrencyCollection, TransactionTickTock,
+    CurrencyCollection, TransactionTickTock,
     Account, Message,
-    Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr, AccStatusChange, TrStoragePhase
+    Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr,
 };
-use ton_types::{fail, HashmapE, Result};
+use ton_types::{error, fail, HashmapE, Result};
 use ton_vm::{
     int, boolean, stack::{Stack, StackItem, integer::IntegerData}
 };
@@ -81,34 +81,13 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();
 
-        let (storage_collected_fee, due_payment) = self.storage_phase(
+        description.storage = self.storage_phase(
             account,
             &mut acc_balance,
             &mut tr,
             is_masterchain,
             is_special,
-        )?;
-        description.storage = if let Some(mut due_payment) = due_payment {
-            if acc_balance.grams >= due_payment {
-                acc_balance.grams.sub(&due_payment)?;
-                account.set_due_payment(None);
-                TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Unchanged)
-            } else {
-                due_payment.sub(&acc_balance.grams)?;
-                acc_balance.grams = Grams::default();
-                if due_payment > self.config.get_gas_config(is_masterchain).freeze_due_limit.into() {
-                    account.set_due_payment(Some(due_payment.clone()));
-                    account.try_freeze()?;
-                    TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Frozen)
-                } else {
-                account.set_due_payment(None);
-                    TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Unchanged)
-                }
-            }
-        } else {
-            account.set_due_payment(None);
-            TrStoragePhase::with_params(storage_collected_fee, None, AccStatusChange::Unchanged)
-        };
+        ).ok_or_else(|| error!("Problem with storage phase"))?;
         let old_account = account.clone();
 
         log::debug!(target: "executor", "compute_phase {}", lt);

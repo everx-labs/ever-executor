@@ -23,7 +23,7 @@ use ton_block::{
     AddSub, Grams, Serializable,
     Account, AccStatusChange, CommonMsgInfo, Message,
     Transaction, TransactionDescrOrdinary, TransactionDescr,
-    TrComputePhase, TrStoragePhase, TrBouncePhase,
+    TrComputePhase, TrBouncePhase,
 };
 use ton_types::{error, fail, Result, HashmapE};
 use ton_vm::{
@@ -124,13 +124,15 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if description.credit_first && !is_ext_msg {
             description.credit_ph = self.credit_phase(&msg_balance, &mut acc_balance);
         }
-        let (storage_collected_fee, due_payment) = self.storage_phase(
+        description.storage_ph = self.storage_phase(
             account,
             &mut acc_balance,
             &mut tr,
             is_masterchain,
             is_special
-        )?;
+        );
+        log::debug!(target: "executor",
+            "storage_phase: {}", if description.storage_ph.is_some() {"present"} else {"none"});
         let old_acc_balance = acc_balance.clone();
 
         if !description.credit_first && !is_ext_msg {
@@ -139,41 +141,12 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         log::debug!(target: "executor", 
             "credit_phase: {}", if description.credit_ph.is_some() {"present"} else {"none"});
 
-        description.storage_ph = if let Some(mut due_payment) = due_payment {
-            if acc_balance.grams >= due_payment {
-                log::debug!(target: "executor", "due payment: {} payable", due_payment);
-                acc_balance.grams.sub(&due_payment)?;
-                account.set_due_payment(None);
-                Some(TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Unchanged))
-            } else {
-                due_payment.sub(&acc_balance.grams)?;
-                acc_balance.grams = Grams::default();
-                if due_payment > self.config.get_gas_config(is_masterchain).freeze_due_limit.into() {
-                    log::debug!(target: "executor", "due payment: {} too big and account is frozen", due_payment);
-                    account.set_due_payment(None);
-                    account.try_freeze()?;
-                    Some(TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Frozen))
-                } else {
-                    log::debug!(target: "executor", "due payment: {}, account: {:?}", due_payment, account.due_payment());
-                    Some(TrStoragePhase::with_params(storage_collected_fee, Some(due_payment), AccStatusChange::Unchanged))
-                }
-            }
-        } else {
-            log::debug!(target: "executor", "storage fee paid: {} ", storage_collected_fee);
-            account.set_due_payment(None);
-            Some(TrStoragePhase::with_params(storage_collected_fee, None, AccStatusChange::Unchanged))
-        };
-
-        log::debug!(target: "executor",
-            "storage_phase: {}", if description.storage_ph.is_some() {"present"} else {"none"});
-
         account.set_last_paid(block_unixtime);
         // TODO: check here
-        if !description.credit_first && (msg_balance.grams > acc_balance.grams) {
-            msg_balance.grams = acc_balance.grams.clone();
-        }
-        #[cfg(feature="timings")]
-        {
+        // if bounce && (msg_balance.grams > acc_balance.grams) {
+        //     msg_balance.grams = acc_balance.grams.clone();
+        // }
+        #[cfg(feature="timings")] {
             self.timings[0].fetch_add(now.elapsed().as_micros() as u64, Ordering::SeqCst);
             now = Instant::now();
         }
@@ -202,8 +175,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let gas_fees;
         let mut out_msgs = vec![];
         description.compute_ph = compute_ph;
-        description.action = match description.compute_ph {
-            TrComputePhase::Vm(ref phase) => {
+        description.action = match &description.compute_ph {
+            TrComputePhase::Vm(phase) => {
+                msg_balance.grams.sub(&phase.gas_fees)?;
                 tr.add_fee_grams(&phase.gas_fees)?;
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: success");
@@ -222,9 +196,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     None
                 }
             }
-            TrComputePhase::Skipped(ref skipped) => {
-                log::debug!(target: "executor", 
-                    "compute_phase: skipped reason {:?}", skipped.reason);
+            TrComputePhase::Skipped(skipped) => {
+                log::debug!(target: "executor", "compute_phase: skipped reason {:?}", skipped.reason);
                 if is_ext_msg {
                     fail!(ExecutorError::ExtMsgComputeSkipped(skipped.reason.clone()))
                 }
