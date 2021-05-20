@@ -342,11 +342,12 @@ pub trait TransactionExecutor {
         &self,
         tr: &mut Transaction,
         acc: &mut Account,
-        acc_remaining_balance: &mut CurrencyCollection,
+        acc_balance: &mut CurrencyCollection,
         msg_remaining_balance: &mut CurrencyCollection,
         actions_cell: Cell,
         is_special: bool,
     ) -> Option<(TrActionPhase, Vec<Message>)> {
+        let mut acc_remaining_balance = acc_balance.clone();
         let mut phase = TrActionPhase::default();
         let mut total_reserved_value = CurrencyCollection::default();
         let mut out_msgs = vec![];
@@ -380,7 +381,7 @@ pub trait TransactionExecutor {
                         &mut phase, 
                         mode,
                         &mut out_msg,
-                        acc_remaining_balance,
+                        &mut acc_remaining_balance,
                         msg_remaining_balance,
                         self.config(),
                         is_special
@@ -395,7 +396,7 @@ pub trait TransactionExecutor {
                     }
                 }
                 OutAction::ReserveCurrency{ mode, value } => {
-                    match reserve_action_handler(mode, &value, acc_remaining_balance) {
+                    match reserve_action_handler(mode, &value, &mut acc_remaining_balance) {
                         Ok(reserved_value) => {
                             phase.spec_actions += 1;
                             match total_reserved_value.add(&reserved_value) {
@@ -452,6 +453,7 @@ pub trait TransactionExecutor {
 
         phase.valid = true;
         phase.success = true;
+        *acc_balance = acc_remaining_balance;
         Some((phase, out_msgs))
     }
 
@@ -736,7 +738,7 @@ fn outmsg_action_handler(
     })?;
     phase.tot_msg_size.append(&msg_cell);
 
-    log::info!(target: "executor", "msg exports value {}", result_value.grams.0);
+    log::info!(target: "executor", "msg with flags: {} exports value {}", mode, result_value.grams.0);
     Ok(result_value)
 }
 
