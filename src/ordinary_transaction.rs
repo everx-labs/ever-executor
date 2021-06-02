@@ -141,7 +141,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         log::debug!(target: "executor", 
             "credit_phase: {}", if description.credit_ph.is_some() {"present"} else {"none"});
 
-        account.set_last_paid(block_unixtime);
+        if !is_special {
+            account.set_last_paid(block_unixtime);
+        }
         // TODO: check here
         // if bounce && (msg_balance.grams > acc_balance.grams) {
         //     msg_balance.grams = acc_balance.grams.clone();
