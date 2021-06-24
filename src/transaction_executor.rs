@@ -531,7 +531,6 @@ pub trait TransactionExecutor {
 
     fn add_messages(&self, tr: &mut Transaction, out_msgs: Vec<Message>, lt: Arc<AtomicU64>) -> Result<u64> {
         let mut lt = lt.fetch_add(1 + out_msgs.len() as u64, Ordering::Relaxed);
-        tr.set_logical_time(lt);
         lt += 1;
         for mut msg in out_msgs {
             msg.set_at_and_lt(tr.now(), lt);
