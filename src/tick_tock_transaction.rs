@@ -77,6 +77,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let is_special = true;
         let lt = last_tr_lt.load(Ordering::Relaxed);
         let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
+        tr.set_logical_time(lt);
         tr.set_now(block_unixtime);
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();
