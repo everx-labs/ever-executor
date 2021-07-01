@@ -643,6 +643,7 @@ fn outmsg_action_handler(
     if let Some(int_header) = msg.int_header_mut() {
         int_header.bounced = false;
         result_value = int_header.value.clone();
+        int_header.ihr_disabled = true; // ihr is disabled because it does not work
         if int_header.ihr_disabled {
             int_header.ihr_fee = Grams::default();
         } else {
