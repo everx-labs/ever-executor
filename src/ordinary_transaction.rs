@@ -97,6 +97,10 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         // TODO: add and process ihr_delivered parameter (if ihr_delivered ihr_fee is added to total fees)
         let mut acc_balance = account.balance().cloned().unwrap_or_default();
         let mut msg_balance = in_msg.get_value().cloned().unwrap_or_default();
+        let ihr_delivered = false;  // ihr is disabled because it does not work
+        if !ihr_delivered {
+            msg_balance.grams.0 += in_msg.int_header().map_or(0, |h| h.ihr_fee.0);
+        }
         log::debug!(target: "executor", "acc_balance: {}, msg_balance: {}, credit_first: {}",
             acc_balance.grams, msg_balance.grams, !bounce);
 
