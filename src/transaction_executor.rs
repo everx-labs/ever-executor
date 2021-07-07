@@ -22,7 +22,7 @@ use ton_block::{
     Account, AccountStatus, AccStatusChange, GasLimitsPrices, GlobalCapabilities,
     AddSub, CurrencyCollection, Grams,
     Message, MsgAddressInt,
-    OutAction, OutActions, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_VALID_MODES,
+    OutAction, OutActions, RESERVE_VALID_MODES, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG, RESERVE_REVERSE,
     SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
     ComputeSkipReason, Transaction, StorageUsedShort,
@@ -47,7 +47,37 @@ const MAX_ACTIONS: usize = 255;
 
 
 
+pub struct ExecuteParams {
+    pub state_libs: HashmapE,
+    pub block_unixtime: u32,
+    pub block_lt: u64,
+    pub last_tr_lt: Arc<AtomicU64>,
+    pub seed_block: UInt256,
+    pub debug: bool
+}
+
+impl ExecuteParams {
+    pub fn default() -> Self {
+        Self {
+            state_libs: HashmapE::default(),
+            block_unixtime: 0,
+            block_lt: 0,
+            last_tr_lt: Arc::new(AtomicU64::new(0)),
+            seed_block: UInt256::default(),
+            debug: false
+        }
+    }
+}
+
 pub trait TransactionExecutor {
+    fn execute_with_params(
+        &self,
+        in_msg: Option<&Message>,
+        account: &mut Account,
+        params: ExecuteParams,
+    ) -> Result<Transaction>;
+
+    #[deprecated]
     fn execute_for_account(
         &self,
         in_msg: Option<&Message>,
@@ -57,8 +87,45 @@ pub trait TransactionExecutor {
         block_lt: u64,
         last_tr_lt: Arc<AtomicU64>,
         debug: bool
-    ) -> Result<Transaction>;
+    ) -> Result<Transaction> {
+        let params = ExecuteParams {
+            state_libs,
+            block_unixtime,
+            block_lt,
+            last_tr_lt,
+            seed_block: UInt256::default(),
+            debug,
+        };
+        let mut account_root = account.serialize()?;
+        let transaction = self.execute_with_libs_and_params(in_msg, &mut account_root, params)?;
+        *account = Account::construct_from_cell(account_root)?;
+        Ok(transaction)
+    }
+    fn execute_with_libs_and_params(
+        &self,
+        in_msg: Option<&Message>,
+        account_root: &mut Cell,
+        params: ExecuteParams,
+    ) -> Result<Transaction> {
+        let old_hash = account_root.repr_hash();
+        let mut account = Account::construct_from_cell(account_root.clone())?;
+        let mut transaction = self.execute_with_params(
+            in_msg,
+            &mut account,
+            params,
+        )?;
+        if self.config().raw_config().has_capability(GlobalCapabilities::CapFastStorageStat) {
+            account.update_storage_stat_fast()?;
+        } else {
+            account.update_storage_stat()?;
+        }
+        *account_root = account.serialize()?;
+        let new_hash = account_root.repr_hash();
+        transaction.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
+        Ok(transaction)
+    }
 
+    #[deprecated]
     fn execute_with_libs(
         &self,
         in_msg: Option<&Message>,
@@ -69,23 +136,18 @@ pub trait TransactionExecutor {
         last_tr_lt: Arc<AtomicU64>,
         debug: bool
     ) -> Result<Transaction> {
-        let old_hash = account_root.repr_hash();
-        let mut account = Account::construct_from_cell(account_root.clone())?;
-        let mut transaction = self.execute_for_account(
-            in_msg,
-            &mut account,
+        let params = ExecuteParams {
             state_libs,
             block_unixtime,
             block_lt,
             last_tr_lt,
-            debug
-        )?;
-        *account_root = account.serialize()?;
-        let new_hash = account_root.repr_hash();
-        transaction.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
-        Ok(transaction)
+            seed_block: UInt256::default(),
+            debug,
+        };
+        self.execute_with_libs_and_params(in_msg, account_root, params)
     }
 
+    #[deprecated]
     fn execute(
         &self,
         in_msg: Option<&Message>,
@@ -95,10 +157,18 @@ pub trait TransactionExecutor {
         last_tr_lt: Arc<AtomicU64>,
         debug: bool
     ) -> Result<Transaction> {
-        self.execute_with_libs(in_msg, account_root, HashmapE::default(), block_unixtime, block_lt, last_tr_lt, debug)
+        let params = ExecuteParams {
+            state_libs: HashmapE::default(),
+            block_unixtime,
+            block_lt,
+            last_tr_lt,
+            seed_block: UInt256::default(),
+            debug,
+        };
+        self.execute_with_libs_and_params(in_msg, account_root, params)
     }
 
-    fn build_contract_info(&self, acc_balance: &CurrencyCollection, acc_address: &MsgAddressInt, block_unixtime: u32, block_lt: u64, tr_lt: u64) -> SmartContractInfo {
+    fn build_contract_info(&self, acc_balance: &CurrencyCollection, acc_address: &MsgAddressInt, block_unixtime: u32, block_lt: u64, tr_lt: u64, seed_block: UInt256) -> SmartContractInfo {
         let mut info = SmartContractInfo::with_myself(acc_address.serialize().unwrap_or_default().into());
         *info.block_lt_mut() = block_lt;
         *info.trans_lt_mut() = tr_lt;
@@ -108,6 +178,7 @@ pub trait TransactionExecutor {
         if let Some(data) = self.config().raw_config().config_params.data() {
             info.set_config_params(data.clone());
         }
+        info.calc_rand_seed(seed_block, &acc_address.address().get_bytestring(0));
         info
     }
 
@@ -131,11 +202,11 @@ pub trait TransactionExecutor {
         log::debug!(target: "executor", "storage_phase");
         if is_special {
             log::debug!(target: "executor", "Special account: AccStatusChange::Unchanged");
-            return Some(TrStoragePhase::with_params(Grams::default(), None, AccStatusChange::Unchanged))
+            return Some(TrStoragePhase::default())
         }
         if acc.is_none() {
             log::debug!(target: "executor", "Account::None");
-            return Some(TrStoragePhase::with_params(Grams::default(), None, AccStatusChange::Unchanged))
+            return Some(TrStoragePhase::default())
         }
 
         let mut fee = Grams::from(self.config().calc_storage_fee(
@@ -191,7 +262,7 @@ pub trait TransactionExecutor {
         acc_balance: &mut CurrencyCollection,
         msg_balance: &CurrencyCollection,
         state_libs: HashmapE, // masterchain libraries
-        smc_info: &SmartContractInfo, 
+        smc_info: SmartContractInfo, 
         stack: Stack,
         is_masterchain: bool,
         is_special: bool,
@@ -248,7 +319,7 @@ pub trait TransactionExecutor {
         vm_phase.gas_limit = (gas.get_gas_limit() as u64).into();
 
         let mut vm = VMSetup::new(code.into())
-            .set_contract_info(&smc_info)
+            .set_contract_info(smc_info)
             .set_stack(stack)
             .set_data(data)
             .set_libraries(libs)
@@ -342,6 +413,7 @@ pub trait TransactionExecutor {
         &self,
         tr: &mut Transaction,
         acc: &mut Account,
+        original_acc_balance: &CurrencyCollection,
         acc_balance: &mut CurrencyCollection,
         msg_remaining_balance: &mut CurrencyCollection,
         actions_cell: Cell,
@@ -396,7 +468,7 @@ pub trait TransactionExecutor {
                     }
                 }
                 OutAction::ReserveCurrency{ mode, value } => {
-                    match reserve_action_handler(mode, &value, &mut acc_remaining_balance) {
+                    match reserve_action_handler(mode, &value, &original_acc_balance, &mut acc_remaining_balance) {
                         Ok(reserved_value) => {
                             phase.spec_actions += 1;
                             match total_reserved_value.add(&reserved_value) {
@@ -442,9 +514,10 @@ pub trait TransactionExecutor {
         }
 
         //calc new account balance
-        acc_remaining_balance.add(&total_reserved_value).map_err(|err|
-            log::debug!(target: "executor", "failed to add account \
-                balance with reserved value {}", err)).ok()?;
+        if let Err(err) = acc_remaining_balance.add(&total_reserved_value) {
+            log::debug!(target: "executor", "failed to add account balance with reserved value {}", err);
+            return None
+        }
 
         if let Some(fee) = phase.total_action_fees.as_ref() {
             log::debug!(target: "executor", "action fees: {}", fee);
@@ -748,33 +821,53 @@ fn outmsg_action_handler(
 fn reserve_action_handler(
     mode: u8, 
     val: &CurrencyCollection,
+    original_acc_balance: &CurrencyCollection,
     acc_remaining_balance: &mut CurrencyCollection,
 ) -> std::result::Result<CurrencyCollection, i32> {
-    if (mode & !RESERVE_VALID_MODES) != 0 {
-        return Err(RESULT_CODE_UNSUPPORTED);
+    if mode & !RESERVE_VALID_MODES != 0 {
+        return Err(RESULT_CODE_ACTIONLIST_INVALID);
     }
 
-    let mut reserved = val.clone();
-    //TODO: need to compare extra currencies too.
-    if reserved.grams.0 > acc_remaining_balance.grams.0 {
-        //reserving more than remaining balance has,
-        //this is error, but check the flag
-        if (mode & RESERVE_IGNORE_ERROR) != 0 {
-            //reserve all remaining balance
-            reserved = acc_remaining_balance.clone();
+    let mut reserved;
+    if mode & RESERVE_PLUS_ORIG != 0 {
+        // Append all currencies
+        if mode & RESERVE_REVERSE != 0 {
+            reserved = original_acc_balance.clone();
+            let result = reserved.sub(&val);
+            match result {
+                Err(_) => return Err(RESULT_CODE_INVALID_BALANCE),
+                Ok(false) => return Err(RESULT_CODE_NOT_ENOUGH_GRAMS),
+                Ok(true) => ()
+            }
         } else {
-            return Err(RESULT_CODE_NOT_ENOUGH_GRAMS);
+            reserved = val.clone();
+            reserved.add(&original_acc_balance).or(Err(RESULT_CODE_INVALID_BALANCE))?;
         }
     } else {
-        // check the mode
-        if (mode & RESERVE_ALL_BUT) != 0 {
-            // need to reserve all but 'val' grams
-            reserved = acc_remaining_balance.clone();
-            reserved.sub(&val).or(Err(RESULT_CODE_INVALID_BALANCE))?;
-        } 
+        if mode & RESERVE_REVERSE != 0 { // flag 8 without flag 4 unacceptable
+            return Err(RESULT_CODE_ACTIONLIST_INVALID);
+        }
+        reserved = val.clone();
+    }
+    if mode & RESERVE_IGNORE_ERROR != 0 {
+        // Only grams
+        reserved.grams.0 = std::cmp::min(reserved.grams.0, acc_remaining_balance.grams.0);
     }
 
-    acc_remaining_balance.sub(&reserved).or(Err(RESULT_CODE_INVALID_BALANCE))?;
+    let mut remaining = acc_remaining_balance.clone();
+    let result = remaining.sub(&reserved);
+    match result {
+        Err(_) => return Err(RESULT_CODE_INVALID_BALANCE),
+        Ok(false) => return Err(RESULT_CODE_NOT_ENOUGH_GRAMS),
+        Ok(true) => ()
+    }
+    std::mem::swap(&mut remaining, acc_remaining_balance);
+
+    if mode & RESERVE_ALL_BUT != 0 {
+        // swap all currencies
+        std::mem::swap(&mut reserved, acc_remaining_balance);
+    }
+
     Ok(reserved)
 }
 
@@ -790,7 +883,7 @@ fn change_library_action_handler(acc: &mut Account, mode: u8, code: Option<Cell>
     let result = match (code, hash) {
         (Some(code), None) => {
             log::debug!(target: "executor", "OutAction::ChangeLibrary mode: {}, code: {}", mode, code);
-            if mode == 0 {
+            if mode == 0 { // TODO: Wrong codes. Look ton_block/out_actions::SET_LIB_CODE_REMOVE
                 acc.delete_library(&code.repr_hash())
             } else {
                 acc.set_library(code, (mode & 2) == 2)

@@ -14,16 +14,16 @@
 
 use crate::{
     blockchain_config::BlockchainConfig,
-    TransactionExecutor,
+    TransactionExecutor, ExecuteParams
 };
 
-use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
+use std::sync::{Arc, atomic::Ordering};
 use ton_block::{
     CurrencyCollection, TransactionTickTock,
     Account, Message,
     Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr,
 };
-use ton_types::{error, fail, HashmapE, Result};
+use ton_types::{error, fail, Result};
 use ton_vm::{
     int, boolean, stack::{Stack, StackItem, integer::IntegerData}
 };
@@ -46,15 +46,11 @@ impl TickTockTransactionExecutor {
 impl TransactionExecutor for TickTockTransactionExecutor {
     ///
     /// Create end execute tick or tock transaction for special account
-    fn execute_for_account(
+    fn execute_with_params(
         &self,
         in_msg: Option<&Message>,
         account: &mut Account,
-        state_libs: HashmapE, // masterchain libraries
-        block_unixtime: u32,
-        block_lt: u64,
-        last_tr_lt: Arc<AtomicU64>,
-        debug: bool
+        params: ExecuteParams,
     ) -> Result<Transaction> {
         if in_msg.is_some() {
             fail!("Tick Tock transaction must not have input message")
@@ -75,10 +71,10 @@ impl TransactionExecutor for TickTockTransactionExecutor {
 
         let is_masterchain = true;
         let is_special = true;
-        let lt = last_tr_lt.load(Ordering::Relaxed);
+        let lt = params.last_tr_lt.load(Ordering::Relaxed);
         let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
         tr.set_logical_time(lt);
-        tr.set_now(block_unixtime);
+        tr.set_now(params.block_unixtime);
         let mut description = TransactionDescrTickTock::default();
         description.tt = self.tt.clone();
 
@@ -90,9 +86,10 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             is_special,
         ).ok_or_else(|| error!("Problem with storage phase"))?;
         let old_account = account.clone();
+        let original_acc_balance = acc_balance.clone();
 
         log::debug!(target: "executor", "compute_phase {}", lt);
-        let smci = self.build_contract_info(&acc_balance, &account_address, block_unixtime, block_lt, lt); 
+        let smci = self.build_contract_info(&acc_balance, &account_address, params.block_unixtime, params.block_lt, lt, params.seed_block);
         let mut stack = Stack::new();
         stack
             .push(int!(account.balance().map(|value| value.grams.0).unwrap_or_default()))
@@ -104,12 +101,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             account,
             &mut acc_balance,
             &CurrencyCollection::default(),
-            state_libs,
-            &smci, 
+            params.state_libs,
+            smci,
             stack,
             is_masterchain,
             is_special,
-            debug
+            params.debug
         )?;
         let mut out_msgs = vec![];
         description.compute_ph = compute_ph;
@@ -119,7 +116,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", lt);
-                    match self.action_phase(&mut tr, account, &mut acc_balance, &mut CurrencyCollection::default(), actions.unwrap_or_default(), is_special) {
+                    match self.action_phase(&mut tr, account, &original_acc_balance, &mut acc_balance, &mut CurrencyCollection::default(), actions.unwrap_or_default(), is_special) {
                         Some((action_ph, msgs)) => {
                             out_msgs = msgs;
                             Some(action_ph)
@@ -156,7 +153,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         if description.aborted {
             *account = old_account;
         }
-        let lt = self.add_messages(&mut tr, out_msgs, last_tr_lt)?;
+        let lt = self.add_messages(&mut tr, out_msgs, params.last_tr_lt)?;
         account.set_last_tr_time(lt);
         tr.write_description(&TransactionDescr::TickTock(description))?;
         Ok(tr)
