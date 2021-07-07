@@ -43,7 +43,7 @@ impl VMSetup {
     }
 
     /// Sets SmartContractInfo for TVM register c7
-    pub fn set_contract_info(mut self, sci: &SmartContractInfo) -> VMSetup {
+    pub fn set_contract_info(mut self, sci: SmartContractInfo) -> VMSetup {
         self.ctrls.put(7, &mut sci.into_temp_data()).unwrap();
         self
     }
