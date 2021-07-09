@@ -594,7 +594,7 @@ pub trait TransactionExecutor {
                 body.shrink_data(0..256);
                 builder.append_bytestring(&body).ok()?;
             }
-            bounce_msg.set_body(builder.into());
+            bounce_msg.set_body(builder.into_cell().ok()?.into());
         }
 
         log::debug!(target: "executor", "bounce fees: {} bounce value: {}", fwd_mine_fees, bounce_msg.get_value().unwrap().grams);
