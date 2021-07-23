@@ -96,7 +96,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             .push(int!(account_id.get_bigint(256)))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
-        let (compute_ph, actions) = self.compute_phase(
+        let (compute_ph, actions, new_data) = self.compute_phase(
             None, 
             account,
             &mut acc_balance,
@@ -116,7 +116,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", lt);
-                    match self.action_phase(&mut tr, account, &original_acc_balance, &mut acc_balance, &mut CurrencyCollection::default(), actions.unwrap_or_default(), is_special) {
+                    match self.action_phase(&mut tr, account, &original_acc_balance, &mut acc_balance, &mut CurrencyCollection::default(), actions.unwrap_or_default(), new_data, is_special) {
                         Some((action_ph, msgs)) => {
                             out_msgs = msgs;
                             Some(action_ph)
