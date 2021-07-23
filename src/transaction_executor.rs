@@ -267,7 +267,7 @@ pub trait TransactionExecutor {
         is_masterchain: bool,
         is_special: bool,
         debug: bool,
-    ) -> Result<(TrComputePhase, Option<Cell>)> {
+    ) -> Result<(TrComputePhase, Option<Cell>, Option<Cell>)> {
         let mut vm_phase = TrComputePhaseVm::default();
         let is_external = if let Some(msg) = msg {
             if let Some(header) = msg.int_header() {
@@ -294,7 +294,7 @@ pub trait TransactionExecutor {
         let gas = init_gas(acc_balance.grams.0, msg_balance.grams.0, is_external, is_special, is_ordinary, gas_config);
         if gas.get_gas_limit() == 0 && gas.get_gas_credit() == 0 {
             log::debug!(target: "executor", "skip computing phase no gas");
-            return Ok((TrComputePhase::skipped(ComputeSkipReason::NoGas), None))
+            return Ok((TrComputePhase::skipped(ComputeSkipReason::NoGas), None, None))
         }
 
         let mut libs = vec![];
@@ -303,7 +303,7 @@ pub trait TransactionExecutor {
                 libs.push(state_init.libraries().inner());
             }
             if let Some(reason) = compute_new_state(acc, msg) {
-                return Ok((TrComputePhase::skipped(reason), None))
+                return Ok((TrComputePhase::skipped(reason), None, None))
             }
         };
         //code must present but can be empty (i.g. for uninitialized account)
@@ -383,12 +383,13 @@ pub trait TransactionExecutor {
             log::debug!(target: "executor", "can't sub funds: {} from acc_balance: {}", vm_phase.gas_fees, acc_balance.grams);
         }
 
-        if let StackItem::Cell(cell) = vm.get_committed_state().get_root() {
-            acc.set_data(cell);
+        let new_data = if let StackItem::Cell(cell) = vm.get_committed_state().get_root() {
+            Some(cell)
         } else {
             log::debug!(target: "executor", "invalid contract, it must be cell in c4 register");
             vm_phase.success = false;
-        }
+            None
+        };
 
         let out_actions = if let StackItem::Cell(root_cell) = vm.get_committed_state().get_actions() {
             Some(root_cell)
@@ -398,7 +399,7 @@ pub trait TransactionExecutor {
             None
         };
 
-        Ok((TrComputePhase::Vm(vm_phase), out_actions))
+        Ok((TrComputePhase::Vm(vm_phase), out_actions, new_data))
     }
 
     /// Implementation of transaction's action phase.
@@ -417,8 +418,10 @@ pub trait TransactionExecutor {
         acc_balance: &mut CurrencyCollection,
         msg_remaining_balance: &mut CurrencyCollection,
         actions_cell: Cell,
+        new_data: Option<Cell>,
         is_special: bool,
     ) -> Option<(TrActionPhase, Vec<Message>)> {
+        let mut acc_copy = acc.clone();
         let mut acc_remaining_balance = acc_balance.clone();
         let mut phase = TrActionPhase::default();
         let mut total_reserved_value = CurrencyCollection::default();
@@ -444,7 +447,7 @@ pub trait TransactionExecutor {
         phase.action_list_hash = actions.hash().ok()?;
         phase.tot_actions = actions.len() as i16;
 
-        let my_addr = acc.get_addr()?.clone();
+        let my_addr = acc_copy.get_addr()?.clone();
         for (i, action) in actions.iter_mut().enumerate() {
             let err_code = match std::mem::replace(action, OutAction::None) {
                 OutAction::SendMsg{ mode, mut out_msg } => {
@@ -480,7 +483,7 @@ pub trait TransactionExecutor {
                     }
                 }
                 OutAction::SetCode{ new_code: code } => {
-                    match setcode_action_handler(acc, code) {
+                    match setcode_action_handler(&mut acc_copy, code) {
                         None => {
                             phase.spec_actions += 1;
                             0
@@ -489,7 +492,7 @@ pub trait TransactionExecutor {
                     }
                 }
                 OutAction::ChangeLibrary{ mode, code, hash} => {
-                    match change_library_action_handler(acc, mode, code, hash) {
+                    match change_library_action_handler(&mut acc_copy, mode, code, hash) {
                         None => {
                             phase.spec_actions += 1;
                             0
@@ -527,6 +530,10 @@ pub trait TransactionExecutor {
         phase.valid = true;
         phase.success = true;
         *acc_balance = acc_remaining_balance;
+        *acc = acc_copy;
+        if let Some(new_data) = new_data {
+            acc.set_data(new_data);
+        }
         Some((phase, out_msgs))
     }
 
