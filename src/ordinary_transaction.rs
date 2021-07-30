@@ -16,7 +16,9 @@ use crate::{
     TransactionExecutor, ExecuteParams,
 };
 
-use std::sync::{atomic::{Ordering}, Arc};
+use std::sync::{atomic::Ordering, Arc};
+#[cfg(feature="timings")]
+use std::sync::atomic::AtomicU64;
 #[cfg(feature="timings")]
 use std::time::Instant;
 use ton_block::{

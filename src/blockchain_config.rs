@@ -19,7 +19,7 @@ use ton_block::{
 };
 use ton_types::{UInt256, Cell, Result};
 
-pub trait TONDefaultConfig {
+pub(crate) trait TONDefaultConfig {
     /// Get default value for masterchain
     fn default_mc() -> Self;
     /// Get default value for workchains
@@ -241,9 +241,10 @@ impl BlockchainConfig {
     }
 
     fn get_defult_raw_config() -> ConfigParams {
-        let mut config = ConfigParams::default();
-        config.config_addr = [0x55; 32].into();
-        config
+        ConfigParams {
+            config_addr: [0x55; 32].into(),
+            ..ConfigParams::default()
+        }
     }
 
     /// Create `BlockchainConfig` struct with `ConfigParams` taken from blockchain

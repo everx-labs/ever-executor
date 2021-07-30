@@ -268,14 +268,20 @@ pub trait TransactionExecutor {
         is_special: bool,
         debug: bool,
     ) -> Result<(TrComputePhase, Option<Cell>, Option<Cell>)> {
+        let mut result_acc = acc.clone();
         let mut vm_phase = TrComputePhaseVm::default();
+        let init_code_hash = self.config().raw_config().has_capability(GlobalCapabilities::CapInitCodeHash);
         let is_external = if let Some(msg) = msg {
             if let Some(header) = msg.int_header() {
                 log::debug!(target: "executor", "msg internal, bounce: {}", header.bounce);
-                if acc.is_none() {
-                    if let Some(new_acc) = Account::from_message(msg) {
-                        *acc = new_acc;
-                        acc.set_last_paid(smc_info.unix_time())
+                if result_acc.is_none() {
+                    if let Some(new_acc) = account_from_message(msg, true, init_code_hash) {
+                        result_acc = new_acc;
+                        result_acc.set_last_paid(smc_info.unix_time());
+
+                        // if there was a balance in message (not bounce), then account state at least become uninit
+                        *acc = result_acc.clone();
+                        acc.uninit_account();
                     }
                 }
                 false
@@ -284,7 +290,7 @@ pub trait TransactionExecutor {
                 true
             }
         } else {
-            debug_assert!(!acc.is_none());
+            debug_assert!(!result_acc.is_none());
             false
         };
         log::debug!(target: "executor", "acc balance: {}", acc_balance.grams);
@@ -302,14 +308,17 @@ pub trait TransactionExecutor {
             if let Some(state_init) = msg.state_init() {
                 libs.push(state_init.libraries().inner());
             }
-            if let Some(reason) = compute_new_state(acc, msg) {
+            if let Some(reason) = compute_new_state(&mut result_acc, msg, init_code_hash) {
+                if !init_code_hash {
+                    *acc = result_acc;
+                }
                 return Ok((TrComputePhase::skipped(reason), None, None))
             }
         };
         //code must present but can be empty (i.g. for uninitialized account)
-        let code = acc.get_code().unwrap_or_default();
-        let data = acc.get_data().unwrap_or_default();
-        libs.push(acc.libraries().inner());
+        let code = result_acc.get_code().unwrap_or_default();
+        let data = result_acc.get_data().unwrap_or_default();
+        libs.push(result_acc.libraries().inner());
         libs.push(state_libs);
 
         vm_phase.gas_credit = match gas.get_gas_credit() as u32 {
@@ -399,6 +408,7 @@ pub trait TransactionExecutor {
             None
         };
 
+        *acc = result_acc;
         Ok((TrComputePhase::Vm(vm_phase), out_actions, new_data))
     }
 
@@ -626,7 +636,7 @@ pub trait TransactionExecutor {
 /// If account is uninitialized - it can be created with active state.
 /// If account exists - it can be frozen.
 /// Returns computed initial phase.
-fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipReason> {
+fn compute_new_state(acc: &mut Account, in_msg: &Message, init_code_hash: bool) -> Option<ComputeSkipReason> {
     log::debug!(target: "executor", "compute_account_state");
     match acc.status() {
         AccountStatus::AccStateNonexist => {
@@ -644,8 +654,8 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipR
             if let Some(state_init) = in_msg.state_init() {
                 // if msg is a constructor message then
                 // borrow code and data from it and switch account state to 'active'.
-                log::debug!(target: "executor", "external message for uninitialized: activated");
-                match acc.try_activate(&state_init) {
+                log::debug!(target: "executor", "message for uninitialized: activated");
+                match acc.try_activate_by_init_code_hash(&state_init, init_code_hash) {
                     Err(err) => {
                         log::debug!(target: "executor", "reason: {}", err);
                         Some(ComputeSkipReason::NoState)
@@ -663,8 +673,8 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message) -> Option<ComputeSkipR
             //and inbound message bear code and data then make some check and unfreeze account
             if !acc.balance().map(|balance| balance.grams.is_zero()).unwrap_or_default() {
                 if let Some(state_init) = in_msg.state_init() {
-                    log::debug!(target: "executor", "external message for frozen: activated");
-                    return match acc.try_activate(&state_init) {
+                    log::debug!(target: "executor", "message for frozen: activated");
+                    return match acc.try_activate_by_init_code_hash(&state_init, init_code_hash) {
                         Err(err) => {
                             log::debug!(target: "executor", "reason: {}", err);
                             Some(ComputeSkipReason::NoState)
@@ -933,4 +943,35 @@ fn init_gas(acc_balance: u128, msg_balance: u128, is_external: bool, is_special:
         gas_max, gas_limit, gas_credit, gas_info.get_real_gas_price()
     );
     Gas::new(gas_limit as i64, gas_credit as i64, gas_max as i64, gas_info.get_real_gas_price() as i64)
+}
+
+/// Calculate new account according to inbound message.
+/// If message has no value, account will not created.
+/// If hash of state_init is equal to account address (or flag check address is false), account will be active.
+/// Otherwise, account will be nonexist or uninit according bounce flag: if bounce, account will be uninit that save money.
+fn account_from_message(msg: &Message, check_address: bool, init_code_hash: bool) -> Option<Account> {
+    let hdr = msg.int_header()?;
+    if hdr.value().grams.is_zero() {
+        log::trace!(target: "executor", "The message has no money");
+        return None;
+    }
+    if let Some(init) = msg.state_init() {
+        if init.code().is_some() {
+            if !check_address || (init.hash().ok()? == hdr.dst.address()) {
+                return Account::active_by_init_code_hash(hdr.dst.clone(), hdr.value().clone(), 0, init.clone(), init_code_hash).ok();
+            } else if check_address {
+                log::trace!(
+                    target: "executor",
+                    "Cannot construct account from message with hash {} because the destination address does not math with hash message code",
+                    msg.hash().unwrap()
+                );
+            }
+        }
+    }
+    if hdr.bounce {
+        log::trace!(target: "executor", "Cannot construct account from message with hash {} because bounce flag is not set", msg.hash().unwrap());
+        return None;
+    } else {
+        return Some(Account::uninit(hdr.dst.clone(), 0, 0, hdr.value().clone()));
+    }
 }
