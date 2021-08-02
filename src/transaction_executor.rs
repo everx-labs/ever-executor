@@ -435,7 +435,6 @@ pub trait TransactionExecutor {
         let mut acc_remaining_balance = acc_balance.clone();
         let mut phase = TrActionPhase::default();
         let mut total_reserved_value = CurrencyCollection::default();
-        let mut out_msgs = vec![];
         let mut actions = match OutActions::construct_from_cell(actions_cell) {
             Err(err) => {
                 log::debug!(
@@ -444,7 +443,7 @@ pub trait TransactionExecutor {
                     err
                 );
                 phase.result_code = RESULT_CODE_ACTIONLIST_INVALID;
-                return Some((phase, out_msgs))
+                return Some((phase, vec![]))
             }
             Ok(actions) => actions
         };
@@ -452,16 +451,38 @@ pub trait TransactionExecutor {
         if actions.len() > MAX_ACTIONS {
             log::debug!(target: "executor", "too many actions: {}", actions.len());
             phase.result_code = RESULT_CODE_TOO_MANY_ACTIONS;
-            return Some((phase, out_msgs))
+            return Some((phase, vec![]))
         }
         phase.action_list_hash = actions.hash().ok()?;
         phase.tot_actions = actions.len() as i16;
 
+        let process_err_code = |err_code: i32, i: usize, phase: &mut TrActionPhase| {
+            if err_code != 0 {
+                log::debug!(target: "executor", "action failed: error_code={}", err_code);
+                phase.valid = true;
+                phase.result_code = err_code;
+                if i != 0 {
+                    phase.result_arg = Some(i as i32);
+                }
+                if err_code == RESULT_CODE_NOT_ENOUGH_GRAMS || err_code == RESULT_CODE_NOT_ENOUGH_EXTRA {
+                    phase.no_funds = true;
+                }
+                true
+            } else {
+                false
+            }
+        };
+
+        let mut out_msgs0 = vec![];
         let my_addr = acc_copy.get_addr()?.clone();
         for (i, action) in actions.iter_mut().enumerate() {
             let err_code = match std::mem::replace(action, OutAction::None) {
                 OutAction::SendMsg{ mode, mut out_msg } => {
                     out_msg.set_src_address(my_addr.clone());
+                    if (mode & SENDMSG_ALL_BALANCE) != 0 {
+                        out_msgs0.push((mode, out_msg));
+                        continue
+                    }
                     let result = outmsg_action_handler(
                         &mut phase, 
                         mode,
@@ -474,7 +495,7 @@ pub trait TransactionExecutor {
                     match result {
                         Ok(_) => {
                             phase.msgs_created += 1;
-                            out_msgs.push(out_msg);
+                            out_msgs0.push((mode, out_msg));
                             0
                         }
                         Err(code) => code
@@ -512,16 +533,35 @@ pub trait TransactionExecutor {
                 }
                 OutAction::None => RESULT_CODE_UNKNOWN_ACTION
             };
-            if err_code != 0 {
-                log::debug!(target: "executor", "action failed: error_code={}", err_code);
-                phase.valid = true;
-                phase.result_code = err_code;
-                if i != 0 {
-                    phase.result_arg = Some(i as i32);
+            if process_err_code(err_code, i, &mut phase) {
+                return Some((phase, vec![]))
+            }
+        }
+
+        let mut out_msgs = vec![];
+        for (i, (mode, mut out_msg)) in out_msgs0.into_iter().enumerate() {
+            if (mode & SENDMSG_ALL_BALANCE) == 0 {
+                out_msgs.push(out_msg);
+                continue
+            }
+            let result = outmsg_action_handler(
+                &mut phase,
+                mode,
+                &mut out_msg,
+                &mut acc_remaining_balance,
+                msg_remaining_balance,
+                self.config(),
+                is_special
+            );
+            let err_code = match result {
+                Ok(_) => {
+                    phase.msgs_created += 1;
+                    out_msgs.push(out_msg);
+                    0
                 }
-                if err_code == RESULT_CODE_NOT_ENOUGH_GRAMS || err_code == RESULT_CODE_NOT_ENOUGH_EXTRA {
-                    phase.no_funds = true;
-                }
+                Err(code) => code
+            };
+            if process_err_code(err_code, i, &mut phase) {
                 return Some((phase, vec![]));
             }
         }
@@ -702,7 +742,8 @@ fn outmsg_action_handler(
     // we cannot send all balance from account and from message simultaneously ?
     let invalid_flags = SENDMSG_REMAINING_MSG_BALANCE | SENDMSG_ALL_BALANCE;
     if  (mode & !SENDMSG_VALID_FLAGS) != 0 ||
-        (mode & invalid_flags) == invalid_flags
+        (mode & invalid_flags) == invalid_flags ||
+        ((mode & SENDMSG_DELETE_IF_EMPTY) != 0 && (mode & SENDMSG_ALL_BALANCE) == 0)
     {
         log::error!(target: "executor", "outmsg mode has unsupported flags");
         return Err(RESULT_CODE_UNSUPPORTED);
@@ -806,7 +847,7 @@ fn outmsg_action_handler(
     }
 
     // TODO: check if was reserved something
-    if (mode & SENDMSG_DELETE_IF_EMPTY) != 0 {
+    if (mode & SENDMSG_DELETE_IF_EMPTY) != 0 && (mode & SENDMSG_ALL_BALANCE) != 0 {
         if acc_balance.grams.0 == 0 {
             phase.status_change = AccStatusChange::Deleted;
         }
