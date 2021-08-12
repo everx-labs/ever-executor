@@ -18,13 +18,15 @@ use crate::{
 
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
+    MASTERCHAIN_ID, BASE_WORKCHAIN_ID,
+    RESERVE_VALID_MODES, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG, RESERVE_REVERSE,
+    SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_DELETE_IF_EMPTY,
+    SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
     Deserializable, GetRepresentationHash, Serializable,
     Account, AccountStatus, AccStatusChange, GasLimitsPrices, GlobalCapabilities,
     AddSub, CurrencyCollection, Grams,
     Message, MsgAddressInt,
-    OutAction, OutActions, RESERVE_VALID_MODES, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG, RESERVE_REVERSE,
-    SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_DELETE_IF_EMPTY,
-    SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
+    OutAction, OutActions,
     ComputeSkipReason, Transaction, StorageUsedShort,
     TrActionPhase, TrBouncePhase, TrComputePhase, TrStoragePhase, TrCreditPhase, TrComputePhaseVm, HashUpdate,
 };
@@ -475,9 +477,53 @@ pub trait TransactionExecutor {
 
         let mut out_msgs0 = vec![];
         let my_addr = acc_copy.get_addr()?.clone();
+        let workchains = match self.config().raw_config().workchains() {
+            Ok(workchains) => workchains,
+            #[cfg(not(test))]
+            Err(e) => {
+                log::error!(target: "executor", "get workchains error {}", e);
+                return None
+            }
+        };
         for (i, action) in actions.iter_mut().enumerate() {
             let err_code = match std::mem::replace(action, OutAction::None) {
                 OutAction::SendMsg{ mode, mut out_msg } => {
+                    if let Some(header) = out_msg.int_header() {
+                        // let src_workchain_id = my_addr.workchain_id();
+                        match header.dst.workchain_id() {
+                            // allow to send only to -1 from 0 or -1
+                            MASTERCHAIN_ID => {
+                                if my_addr.workchain_id() != MASTERCHAIN_ID && my_addr.workchain_id() != BASE_WORKCHAIN_ID {
+                                    log::error!(target: "executor", "masterchain cannot accept from {} workchain", my_addr.workchain_id());
+                                    return None
+                                }
+                            }
+                            // allow to send to self or from master to any which is possible
+                            workchain_id => {
+                                if my_addr.workchain_id() == workchain_id || my_addr.workchain_id() == MASTERCHAIN_ID {
+                                    match workchains.get(&workchain_id) {
+                                        Ok(None) => {
+                                            log::error!(target: "executor", "workchain {} is not deployed", workchain_id);
+                                            return None
+                                        }
+                                        Err(e) => {
+                                            log::error!(target: "executor", "workchain {} cannot be get {}", workchain_id, e);
+                                            return None
+                                        }
+                                        Ok(Some(descr)) => {
+                                            if !descr.accept_msgs {
+                                                log::error!(target: "executor", "cannot send message from {} to {} it doesn't accept", header.src, header.dst);
+                                                return None
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    log::error!(target: "executor", "cannot send message from {} to {} it doesn't allow yet", header.src, header.dst);
+                                    return None
+                                }
+                            }
+                        }
+                    }
                     out_msg.set_src_address(my_addr.clone());
                     if (mode & SENDMSG_ALL_BALANCE) != 0 {
                         out_msgs0.push((mode, out_msg));
