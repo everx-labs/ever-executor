@@ -11,7 +11,6 @@
 * limitations under the License.
 */
 
-
 use crate::{
     blockchain_config::BlockchainConfig,
     TransactionExecutor, ExecuteParams
@@ -27,7 +26,6 @@ use ton_types::{error, fail, Result};
 use ton_vm::{
     int, boolean, stack::{Stack, StackItem, integer::IntegerData}
 };
-
 
 pub struct TickTockTransactionExecutor {
     pub config: BlockchainConfig,
@@ -93,7 +91,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut stack = Stack::new();
         stack
             .push(int!(account.balance().map(|value| value.grams.0).unwrap_or_default()))
-            .push(int!(account_id.get_bigint(256)))
+            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.get_bytestring(0))))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
         let (compute_ph, actions, new_data) = self.compute_phase(
@@ -166,9 +164,10 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut stack = Stack::new();
         stack
             .push(int!(account_balance.0.clone()))
-            .push(int!(account_id.get_bigint(256)))
+            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.get_bytestring(0))))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
         stack
     }
 }
+
