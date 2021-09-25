@@ -11,6 +11,7 @@
 * limitations under the License.
 */
 
+use std::str::FromStr;
 use ton_block::{
     Grams,
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
@@ -123,7 +124,7 @@ impl Default for AccStoragePrices {
 impl AccStoragePrices {
     /// Calculate storage fee for provided data
     pub fn calc_storage_fee(&self, cells: u128, bits: u128, mut last_paid: u32, now: u32, is_masterchain: bool) -> u128 {
-        if now <= last_paid || last_paid == 0 || self.prices.len() == 0 || now <= self.prices[0].utime_since {
+        if now <= last_paid || last_paid == 0 || self.prices.is_empty() || now <= self.prices[0].utime_since {
             return 0
         }
         let mut fee = 0u128;

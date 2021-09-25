@@ -73,16 +73,19 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
         tr.set_logical_time(lt);
         tr.set_now(params.block_unixtime);
-        let mut description = TransactionDescrTickTock::default();
-        description.tt = self.tt.clone();
-
-        description.storage = self.storage_phase(
+        let storage = self.storage_phase(
             account,
             &mut acc_balance,
             &mut tr,
             is_masterchain,
             is_special,
         ).ok_or_else(|| error!("Problem with storage phase"))?;
+        let mut description = TransactionDescrTickTock {
+            tt: self.tt.clone(),
+            storage,
+            ..TransactionDescrTickTock::default()
+        };
+
         let old_account = account.clone();
         let original_acc_balance = acc_balance.clone();
 
@@ -163,7 +166,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let account_id = account.get_id().unwrap();
         let mut stack = Stack::new();
         stack
-            .push(int!(account_balance.0.clone()))
+            .push(int!(account_balance.0))
             .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.get_bytestring(0))))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
