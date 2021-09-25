@@ -10,7 +10,7 @@
 * See the License for the specific TON DEV software governing permissions and
 * limitations under the License.
 */
-
+#![allow(clippy::too_many_arguments)]
 use crate::{
     blockchain_config::{BlockchainConfig, CalcMsgFwdFees},
     error::ExecutorError, vmsetup::VMSetup,
@@ -18,17 +18,15 @@ use crate::{
 
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
-    MASTERCHAIN_ID, BASE_WORKCHAIN_ID,
-    RESERVE_VALID_MODES, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG, RESERVE_REVERSE,
-    SENDMSG_ALL_BALANCE, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_DELETE_IF_EMPTY,
-    SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS,
-    Deserializable, GetRepresentationHash, Serializable,
-    Account, AccountStatus, AccStatusChange, GasLimitsPrices, GlobalCapabilities,
-    AddSub, CurrencyCollection, Grams,
-    Message, MsgAddressInt,
-    OutAction, OutActions,
-    ComputeSkipReason, Transaction, StorageUsedShort,
-    TrActionPhase, TrBouncePhase, TrComputePhase, TrStoragePhase, TrCreditPhase, TrComputePhaseVm, HashUpdate,
+    AccStatusChange, Account, AccountStatus, AddSub, AnycastInfo, ComputeSkipReason,
+    CurrencyCollection, Deserializable, GasLimitsPrices, GetRepresentationHash, GlobalCapabilities,
+    Grams, HashUpdate, Message, MsgAddressInt, OutAction,
+    OutActions, Serializable, StorageUsedShort, TrActionPhase, TrBouncePhase, TrComputePhase,
+    TrComputePhaseVm, TrCreditPhase, TrStoragePhase, Transaction, WorkchainFormat,
+    BASE_WORKCHAIN_ID, MASTERCHAIN_ID, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG,
+    RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
+    SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_REMAINING_MSG_BALANCE,
+    SENDMSG_VALID_FLAGS,
 };
 use ton_types::{error, fail, ExceptionCode, Cell, Result, HashmapE, HashmapType, IBitstring, UInt256};
 use ton_vm::{
@@ -36,16 +34,22 @@ use ton_vm::{
     smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem},
 };
+use ton_block::MsgAddressInt::{AddrStd, AddrVar};
 
-const RESULT_CODE_ACTIONLIST_INVALID: i32 = 32;
-const RESULT_CODE_TOO_MANY_ACTIONS:   i32 = 33;
-const RESULT_CODE_UNKNOWN_ACTION:     i32 = 34;
-const RESULT_CODE_NOT_ENOUGH_GRAMS:   i32 = 37;
-const RESULT_CODE_NOT_ENOUGH_EXTRA:   i32 = 38;
-const RESULT_CODE_INVALID_BALANCE:    i32 = 40;
-const RESULT_CODE_BAD_ACCOUNT_STATE:  i32 = 41;
-const RESULT_CODE_UNSUPPORTED:        i32 = -1;
+const RESULT_CODE_ACTIONLIST_INVALID:    i32 = 32;
+const RESULT_CODE_TOO_MANY_ACTIONS:      i32 = 33;
+const RESULT_CODE_UNKNOWN_ACTION:        i32 = 34;
+const RESULT_CODE_INCORRECT_SRC_ADDRESS: i32 = 35;
+const RESULT_CODE_INCORRECT_DST_ADDRESS: i32 = 36;
+const RESULT_CODE_NOT_ENOUGH_GRAMS:      i32 = 37;
+const RESULT_CODE_NOT_ENOUGH_EXTRA:      i32 = 38;
+const RESULT_CODE_INVALID_BALANCE:       i32 = 40;
+const RESULT_CODE_BAD_ACCOUNT_STATE:     i32 = 41;
+const RESULT_CODE_UNSUPPORTED:           i32 = -1;
 const MAX_ACTIONS: usize = 255;
+
+const MAX_MSG_BITS: usize = 1 << 21;
+const MAX_MSG_CELLS: usize = 1 << 13;
 
 
 
@@ -217,7 +221,7 @@ pub trait TransactionExecutor {
             tr.now(),
         ));
         if let Some(due_payment) = acc.due_payment() {
-            fee.add(&due_payment).ok()?;
+            fee.add(due_payment).ok()?;
         }
 
         if acc_balance.grams >= fee {
@@ -306,7 +310,7 @@ pub trait TransactionExecutor {
         }
 
         let mut libs = vec![];
-        if let Some(ref msg) = msg {
+        if let Some(msg) = msg {
             if let Some(state_init) = msg.state_init() {
                 libs.push(state_init.libraries().inner());
             }
@@ -536,7 +540,8 @@ pub trait TransactionExecutor {
                         &mut acc_remaining_balance,
                         msg_remaining_balance,
                         self.config(),
-                        is_special
+                        is_special,
+                        &my_addr
                     );
                     match result {
                         Ok(_) => {
@@ -548,7 +553,7 @@ pub trait TransactionExecutor {
                     }
                 }
                 OutAction::ReserveCurrency{ mode, value } => {
-                    match reserve_action_handler(mode, &value, &original_acc_balance, &mut acc_remaining_balance) {
+                    match reserve_action_handler(mode, &value, original_acc_balance, &mut acc_remaining_balance) {
                         Ok(reserved_value) => {
                             phase.spec_actions += 1;
                             match total_reserved_value.add(&reserved_value) {
@@ -597,7 +602,8 @@ pub trait TransactionExecutor {
                 &mut acc_remaining_balance,
                 msg_remaining_balance,
                 self.config(),
-                is_special
+                is_special,
+                &my_addr
             );
             let err_code = match result {
                 Ok(_) => {
@@ -741,7 +747,7 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message, init_code_hash: bool) 
                 // if msg is a constructor message then
                 // borrow code and data from it and switch account state to 'active'.
                 log::debug!(target: "executor", "message for uninitialized: activated");
-                match acc.try_activate_by_init_code_hash(&state_init, init_code_hash) {
+                match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                     Err(err) => {
                         log::debug!(target: "executor", "reason: {}", err);
                         Some(ComputeSkipReason::NoState)
@@ -760,7 +766,7 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message, init_code_hash: bool) 
             if !acc.balance().map(|balance| balance.grams.is_zero()).unwrap_or_default() {
                 if let Some(state_init) = in_msg.state_init() {
                     log::debug!(target: "executor", "message for frozen: activated");
-                    return match acc.try_activate_by_init_code_hash(&state_init, init_code_hash) {
+                    return match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                         Err(err) => {
                             log::debug!(target: "executor", "reason: {}", err);
                             Some(ComputeSkipReason::NoState)
@@ -776,6 +782,107 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message, init_code_hash: bool) 
     }
 }
 
+fn check_replace_src_addr<'a>(src: &'a Option<MsgAddressInt>, acc_addr: &'a MsgAddressInt) -> Option<&'a MsgAddressInt> {
+    match src {
+        None => Some(acc_addr),
+        Some(src) => match src {
+            AddrStd(_) => {
+                if src != acc_addr {
+                    None
+                } else {
+                    Some(src)
+                }
+            }
+            AddrVar(_) => None
+        }
+    }
+}
+
+fn is_valid_addr_len(addr_len: u16, min_addr_len: u16, max_addr_len: u16, addr_len_step: u16) -> bool {
+    (addr_len >= min_addr_len) && (addr_len <= max_addr_len) &&
+    ((addr_len == min_addr_len) || (addr_len == max_addr_len) ||
+    ((addr_len_step != 0) && ((addr_len - min_addr_len) % addr_len_step == 0)))
+}
+
+fn check_rewrite_dest_addr(src: &MsgAddressInt, dst: &MsgAddressInt, config: &BlockchainConfig) -> Option<MsgAddressInt> {
+    let (mut anycast_opt, addr_len, workchain_id, address, mut repack);
+    match dst {
+        MsgAddressInt::AddrVar(dst) => {
+            repack = dst.addr_len.0 == 256 && dst.workchain_id >= -128 && dst.workchain_id < 128;
+            anycast_opt = dst.anycast.clone();
+            addr_len = dst.addr_len.0 as u16;
+            workchain_id = dst.workchain_id;
+            address = dst.address.clone();
+        }
+        MsgAddressInt::AddrStd(dst) => {
+            repack = false;
+            anycast_opt = dst.anycast.clone();
+            addr_len = 256;
+            workchain_id = dst.workchain_id as i32;
+            address = dst.address.clone();
+        }
+    }
+
+    let is_masterchain = workchain_id == MASTERCHAIN_ID;
+    if !is_masterchain {
+        let workchains = config.raw_config().workchains().unwrap_or_default();
+        if let Ok(Some(wc)) = workchains.get(&workchain_id) {
+            if !wc.accept_msgs {
+                log::debug!(target: "executor", "destination address belongs to workchain {} not accepting new messages", workchain_id);
+                return None;
+            }
+            let (min_addr_len, max_addr_len, addr_len_step) = match wc.format {
+                WorkchainFormat::Extended(wf) => (wf.min_addr_len(), wf.max_addr_len(), wf.addr_len_step()),
+                WorkchainFormat::Basic(_) => (256, 256, 0)
+            };
+            if !is_valid_addr_len(addr_len, min_addr_len, max_addr_len, addr_len_step) {
+                log::debug!(target: "executor", "destination address has length {} invalid for destination workchain {}", addr_len, workchain_id);
+                return None
+            }
+        } else {
+            log::debug!(target: "executor", "destination address contains unknown workchain_id {}", workchain_id);
+            return None
+        }
+    }
+
+    if let Some(anycast) = &anycast_opt {
+        if is_masterchain {
+            log::debug!(target: "executor", "masterchain address cannot be anycast");
+            return None
+        }
+        match src.address().get_slice(0, anycast.depth.0 as usize) {
+            Ok(pfx) => {
+                if pfx != anycast.rewrite_pfx {
+                    match AnycastInfo::with_rewrite_pfx(pfx) {
+                        Ok(anycast) => {
+                            repack = true;
+                            anycast_opt = Some(anycast)
+                        }
+                        Err(err) => {
+                            log::debug!(target: "executor", "Incorrect anycast prefix {}", err);
+                            return None
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                log::debug!(target: "executor", "Incorrect src address {}", err);
+                return None
+            }
+        }
+    }
+
+    if !repack {
+        Some(dst.clone())
+    } else if addr_len == 256 && workchain_id >= -128 && workchain_id < 128 {
+        // repack as an addr_std
+        MsgAddressInt::with_standart(anycast_opt, workchain_id as i8, address).ok()
+    } else {
+        // repack as an addr_var
+        MsgAddressInt::with_variant(anycast_opt, workchain_id, address).ok()
+    }
+}
+
 fn outmsg_action_handler(
     phase: &mut TrActionPhase, 
     mut mode: u8, 
@@ -784,6 +891,7 @@ fn outmsg_action_handler(
     msg_balance: &mut CurrencyCollection,
     config: &BlockchainConfig,
     is_special: bool,
+    my_addr: &MsgAddressInt,
 ) -> std::result::Result<CurrencyCollection, i32> {
     // we cannot send all balance from account and from message simultaneously ?
     let invalid_flags = SENDMSG_REMAINING_MSG_BALANCE | SENDMSG_ALL_BALANCE;
@@ -802,8 +910,12 @@ fn outmsg_action_handler(
     let (fwd_mine_fee, total_fwd_fees);
     let mut result_value; // to sub from acc_balance
 
-    // TODO: check and rewrite src and dst adresses (see check_replace_src_addr and 
-    // check_rewrite_dest_addr functions)
+    if let Some(new_src) = check_replace_src_addr(&msg.src(), my_addr) {
+        msg.set_src_address(new_src.clone());
+    } else {
+        log::warn!(target: "executor", "Incorrect source address {:?}", msg.src());
+        return Err(RESULT_CODE_INCORRECT_SRC_ADDRESS);
+    }
 
     let fwd_prices = config.get_fwd_prices(msg.is_masterchain());
     let compute_fwd_fee = if is_special {
@@ -818,6 +930,13 @@ fn outmsg_action_handler(
     };
 
     if let Some(int_header) = msg.int_header_mut() {
+        if let Some(new_dst) = check_rewrite_dest_addr(my_addr, &int_header.dst, config) {
+            int_header.dst = new_dst;
+        } else {
+            log::warn!(target: "executor", "Incorrect destination address {}", int_header.dst);
+            return Err(skip.map(|_| RESULT_CODE_INCORRECT_DST_ADDRESS).unwrap_or(0))
+        }
+
         int_header.bounced = false;
         result_value = int_header.value.clone();
         int_header.ihr_disabled = true; // ihr is disabled because it does not work
@@ -893,10 +1012,10 @@ fn outmsg_action_handler(
     }
 
     // TODO: check if was reserved something
-    if (mode & SENDMSG_DELETE_IF_EMPTY) != 0 && (mode & SENDMSG_ALL_BALANCE) != 0 {
-        if acc_balance.grams.0 == 0 {
-            phase.status_change = AccStatusChange::Deleted;
-        }
+    if (mode & SENDMSG_DELETE_IF_EMPTY) != 0
+    && (mode & SENDMSG_ALL_BALANCE) != 0
+    && acc_balance.grams.0 == 0 {
+        phase.status_change = AccStatusChange::Deleted;
     }
 
     // total fwd fees is sum of messages full fwd and ihr fees
@@ -914,6 +1033,11 @@ fn outmsg_action_handler(
         RESULT_CODE_ACTIONLIST_INVALID
     })?;
     phase.tot_msg_size.append(&msg_cell);
+
+    if phase.tot_msg_size.bits() as usize > MAX_MSG_BITS || phase.tot_msg_size.cells() as usize > MAX_MSG_CELLS {
+        log::warn!(target: "executor", "message too large : bits: {}, cells: {}", phase.tot_msg_size.bits(), phase.tot_msg_size.cells());
+        return Err(RESULT_CODE_INVALID_BALANCE);
+    }
 
     log::info!(target: "executor", "msg with flags: {} exports value {}", mode, result_value.grams.0);
     Ok(result_value)
@@ -937,7 +1061,7 @@ fn reserve_action_handler(
         // Append all currencies
         if mode & RESERVE_REVERSE != 0 {
             reserved = original_acc_balance.clone();
-            let result = reserved.sub(&val);
+            let result = reserved.sub(val);
             match result {
                 Err(_) => return Err(RESULT_CODE_INVALID_BALANCE),
                 Ok(false) => return Err(RESULT_CODE_NOT_ENOUGH_GRAMS),
@@ -945,7 +1069,7 @@ fn reserve_action_handler(
             }
         } else {
             reserved = val.clone();
-            reserved.add(&original_acc_balance).or(Err(RESULT_CODE_INVALID_BALANCE))?;
+            reserved.add(original_acc_balance).or(Err(RESULT_CODE_INVALID_BALANCE))?;
         }
     } else {
         if mode & RESERVE_REVERSE != 0 { // flag 8 without flag 4 unacceptable
@@ -994,7 +1118,7 @@ fn change_library_action_handler(acc: &mut Account, mode: u8, code: Option<Cell>
             }
         }
         (None, Some(hash)) => {
-            log::debug!(target: "executor", "OutAction::ChangeLibrary mode: {}, hash: {}", mode, hash.to_hex_string());
+            log::debug!(target: "executor", "OutAction::ChangeLibrary mode: {}, hash: {:x}", mode, hash);
             if mode == 0 {
                 acc.delete_library(&hash)
             } else {
@@ -1040,7 +1164,7 @@ fn account_from_message(msg: &Message, check_address: bool, init_code_hash: bool
     let hdr = msg.int_header()?;
     if hdr.value().grams.is_zero() {
         log::trace!(target: "executor", "The message has no money");
-        return None;
+        return None
     }
     if let Some(init) = msg.state_init() {
         if init.code().is_some() {
@@ -1049,16 +1173,16 @@ fn account_from_message(msg: &Message, check_address: bool, init_code_hash: bool
             } else if check_address {
                 log::trace!(
                     target: "executor",
-                    "Cannot construct account from message with hash {} because the destination address does not math with hash message code",
+                    "Cannot construct account from message with hash {:x} because the destination address does not math with hash message code",
                     msg.hash().unwrap()
                 );
             }
         }
     }
     if hdr.bounce {
-        log::trace!(target: "executor", "Cannot construct account from message with hash {} because bounce flag is not set", msg.hash().unwrap());
-        return None;
+        log::trace!(target: "executor", "Account will not be created. Value of {:x} message will be returned", msg.hash().unwrap());
+        None
     } else {
-        return Some(Account::uninit(hdr.dst.clone(), 0, 0, hdr.value().clone()));
+        Some(Account::uninit(hdr.dst.clone(), 0, 0, hdr.value().clone()))
     }
 }

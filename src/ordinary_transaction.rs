@@ -109,8 +109,10 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         tr.set_now(params.block_unixtime);
         tr.set_in_msg_cell(in_msg_cell.clone());
 
-        let mut description = TransactionDescrOrdinary::default();
-        description.credit_first = !bounce;
+        let mut description = TransactionDescrOrdinary {
+            credit_first: !bounce,
+            ..TransactionDescrOrdinary::default()
+        };
 
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
@@ -136,7 +138,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         log::debug!(target: "executor",
             "storage_phase: {}", if description.storage_ph.is_some() {"present"} else {"none"});
         let mut original_acc_balance = account.balance().cloned().unwrap_or_default();
-        original_acc_balance.sub(&tr.total_fees())?;
+        original_acc_balance.sub(tr.total_fees())?;
 
         if !description.credit_first && !is_ext_msg {
             description.credit_ph = self.credit_phase(&msg_balance, &mut acc_balance);
@@ -156,7 +158,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             now = Instant::now();
         }
 
-        let smci = self.build_contract_info(&acc_balance, &account_address, params.block_unixtime, params.block_lt, lt, params.seed_block);
+        let smci = self.build_contract_info(&acc_balance, account_address, params.block_unixtime, params.block_lt, lt, params.seed_block);
         let mut stack = Stack::new();
         stack
             .push(int!(acc_balance.grams.0))
@@ -166,7 +168,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             .push(boolean!(is_ext_msg));
         log::debug!(target: "executor", "compute_phase");
         let (compute_ph, actions, new_data) = self.compute_phase(
-            Some(&in_msg), 
+            Some(in_msg), 
             account,
             &mut acc_balance,
             &msg_balance,
@@ -238,7 +240,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if description.aborted && !is_ext_msg && bounce {
             if let Some(gas_fees) = gas_fees {
                 log::debug!(target: "executor", "bounce_phase");
-                description.bounce = match self.bounce_phase(&in_msg, &mut tr, gas_fees) {
+                description.bounce = match self.bounce_phase(in_msg, &mut tr, gas_fees) {
                     Some((bounce_ph, Some(bounce_msg))) => {
                         out_msgs.push(bounce_msg);
                         Some(bounce_ph)
@@ -272,7 +274,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             Some(in_msg) => in_msg,
             None => return stack
         };
-        let acc_balance = int!(account.balance().map(|value| value.grams.0.clone()).unwrap_or_default());
+        let acc_balance = int!(account.balance().map(|value| value.grams.0).unwrap_or_default());
         let msg_balance = int!(in_msg.get_value().map(|value| value.grams.0).unwrap_or_default());
         let function_selector = boolean!(in_msg.is_inbound_external());
         let body_slice = in_msg.body().unwrap_or_default();
