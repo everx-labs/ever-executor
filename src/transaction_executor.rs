@@ -314,7 +314,7 @@ pub trait TransactionExecutor {
             if let Some(state_init) = msg.state_init() {
                 libs.push(state_init.libraries().inner());
             }
-            if let Some(reason) = compute_new_state(&mut result_acc, msg, init_code_hash) {
+            if let Some(reason) = compute_new_state(&mut result_acc, &acc_balance, msg, init_code_hash) {
                 if !init_code_hash {
                     *acc = result_acc;
                 }
@@ -728,7 +728,7 @@ pub trait TransactionExecutor {
 /// If account is uninitialized - it can be created with active state.
 /// If account exists - it can be frozen.
 /// Returns computed initial phase.
-fn compute_new_state(acc: &mut Account, in_msg: &Message, init_code_hash: bool) -> Option<ComputeSkipReason> {
+fn compute_new_state(acc: &mut Account, acc_balance: &CurrencyCollection, in_msg: &Message, init_code_hash: bool) -> Option<ComputeSkipReason> {
     log::debug!(target: "executor", "compute_account_state");
     match acc.status() {
         AccountStatus::AccStateNonexist => {
@@ -763,7 +763,7 @@ fn compute_new_state(acc: &mut Account, in_msg: &Message, init_code_hash: bool) 
             log::debug!(target: "executor", "AccountFrozen");
             //account balance was credited and if it positive after that
             //and inbound message bear code and data then make some check and unfreeze account
-            if !acc.balance().map(|balance| balance.grams.is_zero()).unwrap_or_default() {
+            if !acc_balance.grams.is_zero() {
                 if let Some(state_init) = in_msg.state_init() {
                     log::debug!(target: "executor", "message for frozen: activated");
                     return match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
