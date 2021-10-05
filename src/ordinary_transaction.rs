@@ -243,7 +243,10 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if description.aborted && !is_ext_msg && bounce {
             if let Some(gas_fees) = gas_fees {
                 log::debug!(target: "executor", "bounce_phase");
-                description.bounce = match self.bounce_phase(in_msg, &mut tr, gas_fees) {
+                let my_addr = account.get_addr().unwrap_or(&in_msg.dst().ok_or_else(|| ExecutorError::TrExecutorError(
+                    format!("Or account address or in_msg dst address should be present")
+                ))?).clone();
+                description.bounce = match self.bounce_phase(in_msg, &mut tr, gas_fees, &my_addr) {
                     Some((bounce_ph, Some(bounce_msg))) => {
                         out_msgs.push(bounce_msg);
                         Some(bounce_ph)
