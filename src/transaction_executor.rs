@@ -649,7 +649,8 @@ pub trait TransactionExecutor {
         &self,
         msg: &Message,
         tr: &mut Transaction,
-        gas_fee: Grams
+        gas_fee: Grams,
+        my_addr: &MsgAddressInt,
     ) -> Option<(TrBouncePhase, Option<Message>)> {
         let header = msg.int_header()?;
         if !header.bounce {
@@ -660,6 +661,12 @@ pub trait TransactionExecutor {
         let msg_src = header.src_ref()?.clone();
         let msg_dst = std::mem::replace(&mut header.dst, msg_src);
         header.set_src(msg_dst);
+        if let Some(new_dst) = check_rewrite_dest_addr(my_addr, &header.dst, self.config()) {
+            header.dst = new_dst;
+        } else {
+            log::warn!(target: "executor", "Incorrect destination address in a bounced message {}", header.dst);
+            return None
+        }
 
         // gas for compute from message
         if !header.value.grams.sub(&gas_fee).ok()? {
