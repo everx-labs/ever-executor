@@ -34,18 +34,20 @@ use ton_vm::{
     smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem},
 };
-use ton_block::MsgAddressInt::{AddrStd, AddrVar};
+use ton_block::MsgAddressInt::AddrStd;
+use ton_block::MsgAddressInt::AddrVar;
 
-const RESULT_CODE_ACTIONLIST_INVALID:    i32 = 32;
-const RESULT_CODE_TOO_MANY_ACTIONS:      i32 = 33;
-const RESULT_CODE_UNKNOWN_ACTION:        i32 = 34;
-const RESULT_CODE_INCORRECT_SRC_ADDRESS: i32 = 35;
-const RESULT_CODE_INCORRECT_DST_ADDRESS: i32 = 36;
-const RESULT_CODE_NOT_ENOUGH_GRAMS:      i32 = 37;
-const RESULT_CODE_NOT_ENOUGH_EXTRA:      i32 = 38;
-const RESULT_CODE_INVALID_BALANCE:       i32 = 40;
-const RESULT_CODE_BAD_ACCOUNT_STATE:     i32 = 41;
-const RESULT_CODE_UNSUPPORTED:           i32 = -1;
+const RESULT_CODE_ACTIONLIST_INVALID:            i32 = 32;
+const RESULT_CODE_TOO_MANY_ACTIONS:              i32 = 33;
+const RESULT_CODE_UNKNOWN_OR_INVALID_ACTION:     i32 = 34;
+const RESULT_CODE_INCORRECT_SRC_ADDRESS:         i32 = 35;
+const RESULT_CODE_INCORRECT_DST_ADDRESS:         i32 = 36;
+const RESULT_CODE_NOT_ENOUGH_GRAMS:              i32 = 37;
+const RESULT_CODE_NOT_ENOUGH_EXTRA:              i32 = 38;
+const RESULT_CODE_INVALID_BALANCE:               i32 = 40;
+const RESULT_CODE_BAD_ACCOUNT_STATE:             i32 = 41;
+const RESULT_CODE_UNSUPPORTED:                   i32 = -1;
+
 const MAX_ACTIONS: usize = 255;
 
 const MAX_MSG_BITS: usize = 1 << 21;
@@ -448,7 +450,8 @@ pub trait TransactionExecutor {
                     "cannot parse action list: format is invalid, err: {}", 
                     err
                 );
-                phase.result_code = RESULT_CODE_ACTIONLIST_INVALID;
+                // Here you can select only one of 2 error codes: RESULT_CODE_UNKNOWN_OR_INVALID_ACTION or RESULT_CODE_ACTIONLIST_INVALID
+                phase.result_code = RESULT_CODE_UNKNOWN_OR_INVALID_ACTION;
                 return Some((phase, vec![]))
             }
             Ok(actions) => actions
@@ -582,7 +585,7 @@ pub trait TransactionExecutor {
                         Some(code) => code
                     }
                 }
-                OutAction::None => RESULT_CODE_UNKNOWN_ACTION
+                OutAction::None => RESULT_CODE_UNKNOWN_OR_INVALID_ACTION
             };
             if process_err_code(err_code, i, &mut phase) {
                 return Some((phase, vec![]))
