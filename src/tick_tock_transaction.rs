@@ -17,11 +17,7 @@ use crate::{
 };
 
 use std::sync::{Arc, atomic::Ordering};
-use ton_block::{
-    CurrencyCollection, TransactionTickTock,
-    Account, Message,
-    Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr,
-};
+use ton_block::{CurrencyCollection, TransactionTickTock, Account, Message, Transaction, TrComputePhase, TransactionDescrTickTock, TransactionDescr, Grams};
 use ton_types::{error, fail, Result};
 use ton_vm::{
     int, boolean, stack::{Stack, StackItem, integer::IntegerData}
@@ -117,7 +113,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", lt);
-                    match self.action_phase(&mut tr, account, &original_acc_balance, &mut acc_balance, &mut CurrencyCollection::default(), actions.unwrap_or_default(), new_data, is_special) {
+                    match self.action_phase(&mut tr, account, &original_acc_balance, &mut acc_balance, &mut CurrencyCollection::default(), &Grams(0), actions.unwrap_or_default(), new_data, is_special) {
                         Some((action_ph, msgs)) => {
                             out_msgs = msgs;
                             Some(action_ph)
