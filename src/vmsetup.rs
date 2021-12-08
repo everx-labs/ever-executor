@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2020 TON DEV SOLUTIONS LTD.
+* Copyright (C) 2019-2021 TON Labs. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -11,7 +11,7 @@
 * limitations under the License.
 */
 
-use ton_types::{Cell, HashmapE, SliceData};
+use ton_types::{Cell, HashmapE, SliceData, Result};
 use ton_vm::{
     executor::{Engine, gas::gas_state::Gas}, smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem, savelist::SaveList}
@@ -43,15 +43,15 @@ impl VMSetup {
     }
 
     /// Sets SmartContractInfo for TVM register c7
-    pub fn set_contract_info(mut self, sci: SmartContractInfo) -> VMSetup {
-        self.ctrls.put(7, &mut sci.into_temp_data()).unwrap();
-        self
+    pub fn set_contract_info(mut self, sci: SmartContractInfo, with_init_code_hash: bool) -> Result<VMSetup> {
+        self.ctrls.put(7, &mut sci.into_temp_data_with_init_code_hash(with_init_code_hash))?;
+        Ok(self)
     }
 
     /// Sets persistent data for contract in register c4
-    pub fn set_data(mut self, data: Cell) -> VMSetup {
-        self.ctrls.put(4, &mut StackItem::Cell(data)).unwrap();
-        self
+    pub fn set_data(mut self, data: Cell) -> Result<VMSetup> {
+        self.ctrls.put(4, &mut StackItem::Cell(data))?;
+        Ok(self)
     }
 
     /// Sets initial stack for TVM

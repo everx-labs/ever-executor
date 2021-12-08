@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2020 TON DEV SOLUTIONS LTD.
+* Copyright (C) 2019-2021 TON Labs. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -12,12 +12,10 @@
 */
 
 use ton_block::{
-    Grams,
-    ConfigParam18, ConfigParams, FundamentalSmcAddresses, 
-    GasLimitsPrices, GlobalCapabilities, MsgAddressInt, 
-    MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
+    ConfigParam18, ConfigParams, FundamentalSmcAddresses, GasLimitsPrices, GlobalCapabilities, Grams,
+    MsgAddressInt, MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
 };
-use ton_types::{UInt256, Cell, Result};
+use ton_types::{Cell, Result, UInt256};
 
 pub(crate) trait TONDefaultConfig {
     /// Get default value for masterchain
@@ -89,7 +87,7 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// Forward fee for internal message is splited to `int_msg_mine_fee` and `int_msg_remain_fee`:
     /// `msg_forward_fee = int_msg_mine_fee + int_msg_remain_fee`
     /// `int_msg_mine_fee` is a part of transaction `total_fees` and will go validators of account's shard
-    /// `int_msg_remain_fee` is placed in header of internal message and will go to validators 
+    /// `int_msg_remain_fee` is placed in header of internal message and will go to validators
     /// of shard to which message destination address is belong.
     fn mine_fee(&self, fwd_fee: &Grams) -> Grams {
         Grams::from((fwd_fee.0 * self.first_frac as u128) >> 16)
@@ -176,7 +174,7 @@ impl TONDefaultConfig for GasLimitsPrices {
             block_gas_limit: 10000000,
             freeze_due_limit: 100000000,
             delete_due_limit:1000000000,
-            max_gas_threshold:1000000,
+            max_gas_threshold:10000000000,
         }
     }
 
@@ -191,7 +189,7 @@ impl TONDefaultConfig for GasLimitsPrices {
             block_gas_limit: 10000000,
             freeze_due_limit: 100000000,
             delete_due_limit:1000000000,
-            max_gas_threshold:1000000,
+            max_gas_threshold:1000000000,
         }
     }
 }
@@ -201,16 +199,11 @@ impl TONDefaultConfig for GasLimitsPrices {
 pub struct BlockchainConfig {
     gas_prices_mc: GasLimitsPrices,
     gas_prices_wc: GasLimitsPrices,
-
     fwd_prices_mc: MsgForwardPrices,
     fwd_prices_wc: MsgForwardPrices,
-    
     storage_prices: AccStoragePrices,
-
     special_contracts: FundamentalSmcAddresses,
-
     capabilities: u64,
-
     raw_config: ConfigParams,
 }
 
@@ -252,16 +245,11 @@ impl BlockchainConfig {
         Ok(BlockchainConfig {
             gas_prices_mc: config.gas_prices(true)?,
             gas_prices_wc: config.gas_prices(false)?,
-
             fwd_prices_mc: config.fwd_prices(true)?,
             fwd_prices_wc: config.fwd_prices(false)?,
-            
             storage_prices: AccStoragePrices::with_config(&config.storage_prices()?)?,
-
             special_contracts: config.fundamental_smc_addr()?,
-
             capabilities: config.capabilities(),
-
             raw_config: config,
         })
     }
@@ -290,7 +278,7 @@ impl BlockchainConfig {
     }
 
     /// Calculate account storage fee
-    pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> u128 {        
+    pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> u128 {
         self.storage_prices.calc_storage_fee(
             storage.used().cells().into(),
             storage.used().bits().into(),
@@ -307,10 +295,9 @@ impl BlockchainConfig {
             // special account adresses are stored in hashmap
             // config account is special too
             Ok(
-                self.raw_config.config_addr == account_id ||
+                self.raw_config.config_addr == account_id || 
                 self.special_contracts.get_raw(account_id)?.is_some()
             )
-
         } else {
             Ok(false)
         }
@@ -323,4 +310,5 @@ impl BlockchainConfig {
     pub fn has_capability(&self, capability: GlobalCapabilities) -> bool {
         (self.capabilities & (capability as u64)) != 0
     }
+
 }
