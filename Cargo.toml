@@ -2,7 +2,7 @@
 build = 'build.rs'
 edition = '2018'
 name = 'ton_executor'
-version = '1.15.46'
+version = '1.15.47'
 
 [dependencies]
 base64 = '0.10.0'
