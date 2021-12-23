@@ -23,7 +23,7 @@ use std::sync::{atomic::Ordering, Arc};
 use std::time::Instant;
 use ton_block::{
     AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message, Serializable,
-    TrBouncePhase, TrComputePhase, Transaction, TransactionDescr, TransactionDescrOrdinary,
+    TrBouncePhase, TrComputePhase, Transaction, TransactionDescr, TransactionDescrOrdinary, MASTERCHAIN_ID
 };
 use ton_types::{error, fail, Result};
 use ton_vm::{
@@ -73,7 +73,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         let in_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
         let in_msg_cell = in_msg.serialize()?; // TODO: get from outside
-        let is_masterchain = in_msg.is_masterchain();
+        let is_masterchain = in_msg.dst_workchain_id() == Some(MASTERCHAIN_ID);
         log::debug!(target: "executor", "Ordinary transaction executing, in message id: {:x}", in_msg_cell.repr_hash());
         let (bounce, is_ext_msg) = match in_msg.header() {
             CommonMsgInfo::ExtOutMsgInfo(_) => fail!(ExecutorError::InvalidExtMessage),
