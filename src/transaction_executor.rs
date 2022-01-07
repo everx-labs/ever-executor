@@ -18,7 +18,7 @@ use crate::{
 
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
-    AccStatusChange, Account, AccountStatus, AddSub, AnycastInfo, ComputeSkipReason,
+    AccStatusChange, Account, AccountStatus, AddSub, ComputeSkipReason,
     CurrencyCollection, Deserializable, GasLimitsPrices, GetRepresentationHash, GlobalCapabilities,
     Grams, HashUpdate, Message, MsgAddressInt, OutAction,
     OutActions, Serializable, StorageUsedShort, TrActionPhase, TrBouncePhase, TrComputePhase,
@@ -46,12 +46,19 @@ const RESULT_CODE_NOT_ENOUGH_GRAMS:              i32 = 37;
 const RESULT_CODE_NOT_ENOUGH_EXTRA:              i32 = 38;
 const RESULT_CODE_INVALID_BALANCE:               i32 = 40;
 const RESULT_CODE_BAD_ACCOUNT_STATE:             i32 = 41;
+const RESULT_CODE_ANYCAST:                       i32 = 50;
 const RESULT_CODE_UNSUPPORTED:                   i32 = -1;
 
 const MAX_ACTIONS: usize = 255;
 
 const MAX_MSG_BITS: usize = 1 << 21;
 const MAX_MSG_CELLS: usize = 1 << 13;
+
+#[derive(PartialEq, Debug)]
+pub enum IncorrectCheckRewrite {
+    Anycast,
+    Other
+}
 
 
 
@@ -542,7 +549,7 @@ pub trait TransactionExecutor {
         phase.action_list_hash = actions.hash()?;
         phase.tot_actions = actions.len() as i16;
 
-        let process_err_code = |mut err_code: i32, i: usize, phase: &mut TrActionPhase| {
+        let process_err_code = |mut err_code: i32, i: usize, phase: &mut TrActionPhase| -> Result<bool> {
             if err_code == -1 {
                 err_code = RESULT_CODE_UNKNOWN_OR_INVALID_ACTION;
             }
@@ -556,9 +563,13 @@ pub trait TransactionExecutor {
                 if err_code == RESULT_CODE_NOT_ENOUGH_GRAMS || err_code == RESULT_CODE_NOT_ENOUGH_EXTRA {
                     phase.no_funds = true;
                 }
-                true
+                if err_code == RESULT_CODE_ANYCAST {
+                    fail!("Anycast on dst address")
+                } else {
+                    Ok(true)
+                }
             } else {
-                false
+                Ok(false)
             }
         };
 
@@ -671,7 +682,7 @@ pub trait TransactionExecutor {
                 }
                 OutAction::None => RESULT_CODE_UNKNOWN_OR_INVALID_ACTION
             };
-            if process_err_code(err_code, i, &mut phase) {
+            if process_err_code(err_code, i, &mut phase)? {
                 return Ok((phase, vec![]))
             }
         }
@@ -703,7 +714,7 @@ pub trait TransactionExecutor {
                 }
                 Err(code) => code
             };
-            if process_err_code(err_code, i, &mut phase) {
+            if process_err_code(err_code, i, &mut phase)? {
                 return Ok((phase, vec![]));
             }
         }
@@ -745,7 +756,7 @@ pub trait TransactionExecutor {
         compute_phase_fees: &Grams,
         msg: &Message,
         tr: &mut Transaction,
-        my_addr: &MsgAddressInt,
+        _: &MsgAddressInt,
     ) -> Result<(TrBouncePhase, Option<Message>)> {
         let header = msg.int_header().ok_or(error!("Not found msg internal header"))?;
         if !header.bounce {
@@ -756,11 +767,12 @@ pub trait TransactionExecutor {
         let msg_src = header.src_ref().ok_or(error!("Not found src in message header"))?.clone();
         let msg_dst = std::mem::replace(&mut header.dst, msg_src);
         header.set_src(msg_dst);
-        if let Some(new_dst) = check_rewrite_dest_addr(my_addr, &header.dst, self.config()) {
-            header.dst = new_dst;
-        } else {
-            log::warn!(target: "executor", "Incorrect destination address in a bounced message {}", header.dst);
-            fail!("Incorrect destination address in a bounced message {}", header.dst)
+        match check_rewrite_dest_addr(&header.dst, self.config()) {
+            Ok(new_dst) => {header.dst = new_dst}
+            Err(_) => {
+                log::warn!(target: "executor", "Incorrect destination address in a bounced message {}", header.dst);
+                fail!("Incorrect destination address in a bounced message {}", header.dst)
+            }
         }
 
         // calculated storage for bounced message is empty
@@ -898,8 +910,8 @@ fn is_valid_addr_len(addr_len: u16, min_addr_len: u16, max_addr_len: u16, addr_l
     ((addr_len_step != 0) && ((addr_len - min_addr_len) % addr_len_step == 0)))
 }
 
-fn check_rewrite_dest_addr(src: &MsgAddressInt, dst: &MsgAddressInt, config: &BlockchainConfig) -> Option<MsgAddressInt> {
-    let (mut anycast_opt, addr_len, workchain_id, address, mut repack);
+fn check_rewrite_dest_addr(dst: &MsgAddressInt, config: &BlockchainConfig) -> std::result::Result<MsgAddressInt, IncorrectCheckRewrite> {
+    let (anycast_opt, addr_len, workchain_id, address, repack);
     match dst {
         MsgAddressInt::AddrVar(dst) => {
             repack = dst.addr_len.0 == 256 && dst.workchain_id >= -128 && dst.workchain_id < 128;
@@ -923,7 +935,7 @@ fn check_rewrite_dest_addr(src: &MsgAddressInt, dst: &MsgAddressInt, config: &Bl
         if let Ok(Some(wc)) = workchains.get(&workchain_id) {
             if !wc.accept_msgs {
                 log::debug!(target: "executor", "destination address belongs to workchain {} not accepting new messages", workchain_id);
-                return None;
+                return Err(IncorrectCheckRewrite::Other);
             }
             let (min_addr_len, max_addr_len, addr_len_step) = match wc.format {
                 WorkchainFormat::Extended(wf) => (wf.min_addr_len(), wf.max_addr_len(), wf.addr_len_step()),
@@ -931,15 +943,18 @@ fn check_rewrite_dest_addr(src: &MsgAddressInt, dst: &MsgAddressInt, config: &Bl
             };
             if !is_valid_addr_len(addr_len, min_addr_len, max_addr_len, addr_len_step) {
                 log::debug!(target: "executor", "destination address has length {} invalid for destination workchain {}", addr_len, workchain_id);
-                return None
+                return Err(IncorrectCheckRewrite::Other);
             }
         } else {
             log::debug!(target: "executor", "destination address contains unknown workchain_id {}", workchain_id);
-            return None
+            return Err(IncorrectCheckRewrite::Other);
         }
     }
 
-    if let Some(anycast) = &anycast_opt {
+    if let Some(_) = &anycast_opt {
+        log::debug!(target: "executor", "address cannot be anycast");
+        return Err(IncorrectCheckRewrite::Anycast);
+        /*
         if is_masterchain {
             log::debug!(target: "executor", "masterchain address cannot be anycast");
             return None
@@ -964,16 +979,21 @@ fn check_rewrite_dest_addr(src: &MsgAddressInt, dst: &MsgAddressInt, config: &Bl
                 return None
             }
         }
+         */
     }
 
     if !repack {
-        Some(dst.clone())
+        Ok(dst.clone())
     } else if addr_len == 256 && workchain_id >= -128 && workchain_id < 128 {
         // repack as an addr_std
-        MsgAddressInt::with_standart(anycast_opt, workchain_id as i8, address).ok()
+        MsgAddressInt::with_standart(anycast_opt, workchain_id as i8, address).map_err(|_| {
+            IncorrectCheckRewrite::Other
+        })
     } else {
         // repack as an addr_var
-        MsgAddressInt::with_variant(anycast_opt, workchain_id, address).ok()
+        MsgAddressInt::with_variant(anycast_opt, workchain_id, address).map_err(|_| {
+            IncorrectCheckRewrite::Other
+        })
     }
 }
 
@@ -1027,11 +1047,17 @@ fn outmsg_action_handler(
     };
 
     if let Some(int_header) = msg.int_header_mut() {
-        if let Some(new_dst) = check_rewrite_dest_addr(my_addr, &int_header.dst, config) {
-            int_header.dst = new_dst;
-        } else {
-            log::warn!(target: "executor", "Incorrect destination address {}", int_header.dst);
-            return Err(skip.map(|_| RESULT_CODE_INCORRECT_DST_ADDRESS).unwrap_or(0))
+        match check_rewrite_dest_addr(&int_header.dst, config) {
+            Ok(new_dst) => {int_header.dst = new_dst}
+            Err(type_error) => {
+                if type_error == IncorrectCheckRewrite::Anycast {
+                    log::warn!(target: "executor", "Incorrect destination anycast address {}", int_header.dst);
+                    return Err(RESULT_CODE_ANYCAST)
+                } else {
+                    log::warn!(target: "executor", "Incorrect destination address {}", int_header.dst);
+                    return Err(skip.map(|_| RESULT_CODE_INCORRECT_DST_ADDRESS).unwrap_or(0))
+                }
+            }
         }
 
         int_header.bounced = false;
