@@ -307,7 +307,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     &mut acc_balance, 
                     &compute_phase_gas_fees, 
                     in_msg, 
-                    &mut tr, 
+                    &mut tr,
                     &my_addr
                 ) {
                     Ok((bounce_ph, Some(bounce_msg))) => {
