@@ -12,9 +12,8 @@
 */
 
 use crate::{
-    blockchain_config::{BlockchainConfig, CalcMsgFwdFees},
-    error::ExecutorError,
-    ExecuteParams, TransactionExecutor,
+    blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError, ExecuteParams,
+    TransactionExecutor, VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES
 };
 #[cfg(feature = "timings")]
 use std::sync::atomic::AtomicU64;
@@ -71,10 +70,17 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         #[cfg(feature="timings")]
         let mut now = Instant::now();
 
+        let revert_anycast = 
+            self.config.global_version() >= VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES;
+
         let in_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
         let in_msg_cell = in_msg.serialize()?; // TODO: get from outside
         let is_masterchain = in_msg.dst_workchain_id() == Some(MASTERCHAIN_ID);
-        log::debug!(target: "executor", "Ordinary transaction executing, in message id: {:x}", in_msg_cell.repr_hash());
+        log::debug!(
+            target: "executor", 
+            "Ordinary transaction executing, in message id: {:x}", 
+            in_msg_cell.repr_hash()
+        );
         let (bounce, is_ext_msg) = match in_msg.header() {
             CommonMsgInfo::ExtOutMsgInfo(_) => fail!(ExecutorError::InvalidExtMessage),
             CommonMsgInfo::IntMsgInfo(ref hdr) => (hdr.bounce, false),
@@ -84,6 +90,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let account_address = in_msg.dst_ref().ok_or_else(|| ExecutorError::TrExecutorError(
             format!("Input message {:x} has no dst address", in_msg_cell.repr_hash())
         ))?;
+        if revert_anycast {
+            if account_address.rewrite_pfx().is_some() {
+                fail!(ExecutorError::TrExecutorError("Anycast on dst address".to_string()))
+            }
+        }
         let account_id = match account.get_id() {
             Some(account_id) => {
                 log::debug!(target: "executor", "Account = {:x}", account_id);

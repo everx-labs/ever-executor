@@ -17,6 +17,8 @@ use ton_block::{
 };
 use ton_types::{Cell, Result, UInt256};
 
+pub const VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES: u32 = 8;
+
 pub(crate) trait TONDefaultConfig {
     /// Get default value for masterchain
     fn default_mc() -> Self;
@@ -204,6 +206,7 @@ pub struct BlockchainConfig {
     storage_prices: AccStoragePrices,
     special_contracts: FundamentalSmcAddresses,
     capabilities: u64,
+    global_version: u32,
     raw_config: ConfigParams,
 }
 
@@ -217,12 +220,14 @@ impl Default for BlockchainConfig {
             storage_prices: AccStoragePrices::default(),
             special_contracts: Self::get_default_special_contracts(),
             raw_config: Self::get_defult_raw_config(),
+            global_version: 0,
             capabilities: 0x2e,
         }
     }
 }
 
 impl BlockchainConfig {
+  
     fn get_default_special_contracts() -> FundamentalSmcAddresses {
         let mut map = FundamentalSmcAddresses::default();
         map.add_key(&UInt256::with_array([0x33u8; 32])).unwrap();
@@ -250,6 +255,7 @@ impl BlockchainConfig {
             storage_prices: AccStoragePrices::with_config(&config.storage_prices()?)?,
             special_contracts: config.fundamental_smc_addr()?,
             capabilities: config.capabilities(),
+            global_version: config.global_version(),
             raw_config: config,
         })
     }
@@ -301,6 +307,10 @@ impl BlockchainConfig {
         } else {
             Ok(false)
         }
+    }
+
+    pub fn global_version(&self) -> u32 {
+        self.global_version
     }
 
     pub fn raw_config(&self) -> &ConfigParams {
