@@ -16,6 +16,7 @@ use ton_vm::{
     executor::{Engine, gas::gas_state::Gas}, smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem, savelist::SaveList}
 };
+use crate::BlockchainConfig;
 
 /// Builder for virtual machine engine. Initialises registers,
 /// stack and code of VM engine. Returns initialized instance of TVM.
@@ -43,8 +44,17 @@ impl VMSetup {
     }
 
     /// Sets SmartContractInfo for TVM register c7
+    pub fn set_contract_info_with_config(mut self, sci: SmartContractInfo, config: &BlockchainConfig) -> Result<VMSetup> {
+        self.ctrls.put(7, &mut sci.into_temp_data_with_init_code_hash(
+            config.has_capability(ton_block::GlobalCapabilities::CapInitCodeHash),
+            config.has_capability(ton_block::GlobalCapabilities::CapMycode)
+        ))?;
+        Ok(self)
+    }
+
+    /// Sets SmartContractInfo for TVM register c7
     pub fn set_contract_info(mut self, sci: SmartContractInfo, with_init_code_hash: bool) -> Result<VMSetup> {
-        self.ctrls.put(7, &mut sci.into_temp_data_with_init_code_hash(with_init_code_hash))?;
+        self.ctrls.put(7, &mut sci.into_temp_data_with_init_code_hash(with_init_code_hash, false))?;
         Ok(self)
     }
 
