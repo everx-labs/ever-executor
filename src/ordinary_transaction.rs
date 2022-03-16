@@ -251,7 +251,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                         &original_acc_balance,
                         &mut acc_balance,
                         &mut msg_balance,
-                        &phase.gas_fees,
+                        &compute_phase_gas_fees,
                         actions.unwrap_or_default(),
                         new_data,
                         is_special
@@ -310,9 +310,13 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if description.aborted && !is_ext_msg && bounce {
             if !action_phase_processed {
                 log::debug!(target: "executor", "bounce_phase");
-                let my_addr = account.get_addr().unwrap_or(&in_msg.dst().ok_or_else(|| ExecutorError::TrExecutorError(
-                    format!("Or account address or in_msg dst address should be present")
-                ))?).clone();
+                let my_addr = account.get_addr().unwrap_or(
+                    &in_msg.dst().ok_or_else(
+                        || ExecutorError::TrExecutorError(
+                            format!("Or account address or in_msg dst address should be present")
+                        )
+                    )?
+                ).clone();
                 description.bounce = match self.bounce_phase(
                     msg_balance.clone(),
                     &mut acc_balance, 
@@ -338,9 +342,6 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             if let Some(TrBouncePhase::Ok(_)) = description.bounce {
                 log::debug!(target: "executor", "restore balance {} => {}", acc_balance.grams, original_acc_balance.grams);
                 acc_balance = original_acc_balance;
-                if (account.status() == AccountStatus::AccStateUninit) && acc_balance.is_zero()? {
-                    *account = Account::default();
-                }
             } else {
                 if account.is_none() && !acc_balance.is_zero()? {
                     *account = Account::uninit(

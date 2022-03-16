@@ -321,4 +321,7 @@ impl BlockchainConfig {
         (self.capabilities & (capability as u64)) != 0
     }
 
+    pub fn capabilites(&self) -> u64 {
+        self.capabilities
+    }
 }

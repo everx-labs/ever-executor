@@ -30,11 +30,12 @@ pub struct VMSetup {
 }
 
 impl VMSetup {
+
     /// Creates new instance of VMSetup with contract code.
     /// Initializes some registers of TVM with predefined values.
-    pub fn new(code: SliceData) -> Self {
+    pub fn with_capabilites(code: SliceData, capabilites: u64) -> Self {
         VMSetup {
-            vm: Engine::new(),
+            vm: Engine::with_capabilities(capabilites),
             code,
             ctrls: SaveList::new(),
             stack: None,
@@ -44,7 +45,11 @@ impl VMSetup {
     }
 
     /// Sets SmartContractInfo for TVM register c7
-    pub fn set_contract_info_with_config(mut self, sci: SmartContractInfo, config: &BlockchainConfig) -> Result<VMSetup> {
+    pub fn set_contract_info_with_config(
+        mut self, 
+        sci: SmartContractInfo, 
+        config: &BlockchainConfig
+    ) -> Result<VMSetup> {
         self.ctrls.put(7, &mut sci.into_temp_data_with_init_code_hash(
             config.has_capability(ton_block::GlobalCapabilities::CapInitCodeHash),
             config.has_capability(ton_block::GlobalCapabilities::CapMycode)
@@ -53,8 +58,15 @@ impl VMSetup {
     }
 
     /// Sets SmartContractInfo for TVM register c7
-    pub fn set_contract_info(mut self, sci: SmartContractInfo, with_init_code_hash: bool) -> Result<VMSetup> {
-        self.ctrls.put(7, &mut sci.into_temp_data_with_init_code_hash(with_init_code_hash, false))?;
+    pub fn set_contract_info(
+        mut self, 
+        sci: SmartContractInfo, 
+        with_init_code_hash: bool
+    ) -> Result<VMSetup> {
+        self.ctrls.put(
+            7, 
+            &mut sci.into_temp_data_with_init_code_hash(with_init_code_hash, false)
+        )?;
         Ok(self)
     }
 
@@ -118,6 +130,12 @@ impl VMSetup {
                 .unwrap();
             assert_eq!(balance_in_smc, balance_in_stack);
         }
-        self.vm.setup_with_libraries(self.code, Some(self.ctrls), self.stack, self.gas, self.libraries)
+        self.vm.setup_with_libraries(
+            self.code, 
+            Some(self.ctrls), 
+            self.stack, 
+            self.gas, 
+            self.libraries
+        )
     }
 }

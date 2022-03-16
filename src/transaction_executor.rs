@@ -11,6 +11,7 @@
 * limitations under the License.
 */
 #![allow(clippy::too_many_arguments)]
+
 use crate::{
     blockchain_config::{BlockchainConfig, CalcMsgFwdFees},
     error::ExecutorError, vmsetup::VMSetup,
@@ -18,17 +19,18 @@ use crate::{
 
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
 use ton_block::{
-    AccStatusChange, Account, AccountStatus, AddSub, ComputeSkipReason,
-    CurrencyCollection, Deserializable, GasLimitsPrices, GetRepresentationHash, GlobalCapabilities,
-    Grams, HashUpdate, Message, MsgAddressInt, OutAction,
-    OutActions, Serializable, StorageUsedShort, TrActionPhase, TrBouncePhase, TrComputePhase,
-    TrComputePhaseVm, TrCreditPhase, TrStoragePhase, Transaction, WorkchainFormat,
-    BASE_WORKCHAIN_ID, MASTERCHAIN_ID, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG,
-    RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
-    SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_REMAINING_MSG_BALANCE,
-    SENDMSG_VALID_FLAGS,
+    AccStatusChange, Account, AccountStatus, AddSub, ComputeSkipReason, CurrencyCollection, 
+    Deserializable, GasLimitsPrices, GetRepresentationHash, GlobalCapabilities, Grams, 
+    HashUpdate, Message, MsgAddressInt, OutAction, OutActions, Serializable, StorageUsedShort, 
+    TrActionPhase, TrBouncePhase, TrComputePhase, TrComputePhaseVm, TrCreditPhase, TrStoragePhase, 
+    Transaction, WorkchainFormat, BASE_WORKCHAIN_ID, MASTERCHAIN_ID, RESERVE_ALL_BUT, 
+    RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG, RESERVE_REVERSE, RESERVE_VALID_MODES, 
+    SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY,
+    SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS
 };
-use ton_types::{error, fail, ExceptionCode, Cell, Result, HashmapE, HashmapType, IBitstring, UInt256};
+use ton_types::{
+    error, fail, ExceptionCode, Cell, Result, HashmapE, HashmapType, IBitstring, UInt256
+};
 use ton_vm::{
     error::tvm_exception, executor::gas::gas_state::Gas,
     smart_contract_info::SmartContractInfo,
@@ -224,7 +226,7 @@ pub trait TransactionExecutor {
         is_masterchain: bool,
         is_special: bool
     ) -> Result<TrStoragePhase> {
-        if tr.now < acc.last_paid() {
+        if tr.now() < acc.last_paid() {
             fail!("transaction timestamp must be greater then account timestamp")
         }
 
@@ -274,15 +276,13 @@ pub trait TransactionExecutor {
                 fee.0 > self.config().get_gas_config(is_masterchain).delete_due_limit.into();
 
             if need_delete {
-                let mut total_fees = tr.total_fees.clone();
-                total_fees.add(&CurrencyCollection { grams: Default::default(), other: acc_balance.other.clone() })?;
-                tr.set_total_fees(total_fees);
-                *acc = Account::new();
+                tr.total_fees_mut().add(acc_balance)?;
+                *acc = Account::default();
                 Ok(TrStoragePhase::with_params(storage_fees_collected, Some(fee), AccStatusChange::Deleted))
             } else if need_freeze {
                 acc.set_due_payment(Some(fee.clone()));
                 if acc.status() == AccountStatus::AccStateActive {
-                    acc.try_freeze().unwrap();
+                    acc.try_freeze()?;
                     Ok(TrStoragePhase::with_params(storage_fees_collected, Some(fee), AccStatusChange::Frozen))
                 } else {
                     Ok(TrStoragePhase::with_params(storage_fees_collected, Some(fee), AccStatusChange::Unchanged))
@@ -305,16 +305,34 @@ pub trait TransactionExecutor {
         msg_balance: &mut CurrencyCollection,
         acc_balance: &mut CurrencyCollection,
     ) -> Result<TrCreditPhase> {
-        let due_payment = acc.due_payment().cloned().unwrap_or(Grams::default());
-        let collected = std::cmp::min(&due_payment, &msg_balance.grams).clone();
-        msg_balance.grams.0 = msg_balance.grams.0 - collected.0;
-        let due_payment_remaining = Grams(due_payment.0 - collected.0);
-        acc.set_due_payment(if due_payment_remaining.0 != 0 {Some(due_payment_remaining)} else {None});
-        tr.total_fees.grams.0 = tr.total_fees.grams.0 + collected.0;
-
-        log::debug!(target: "executor", "credit_phase: add funds {} to {}", msg_balance.grams, acc_balance.grams);
+        let collected = if let Some(due_payment) = acc.due_payment() {
+            let collected = std::cmp::min(due_payment, &msg_balance.grams).clone();
+            msg_balance.grams.sub(&collected)?;
+            let mut due_payment_remaining = due_payment.clone();
+            due_payment_remaining.sub(&collected)?;
+            acc.set_due_payment(
+                if due_payment_remaining.is_zero() {
+                    None
+                } else {
+                    Some(due_payment_remaining)
+                }
+            );
+            tr.total_fees_mut().grams.add(&collected)?;
+            if collected.is_zero() {
+                None
+            } else {
+                Some(collected)
+            }
+        } else {
+            None
+        };
+        log::debug!(
+            target: "executor", 
+            "credit_phase: add funds {} to {}", 
+            msg_balance.grams, acc_balance.grams
+        );
         acc_balance.add(&msg_balance)?;
-        Ok(TrCreditPhase::with_params(if collected.0 != 0 {Some(collected.clone())} else {None}, msg_balance.clone()))
+        Ok(TrCreditPhase::with_params(collected, msg_balance.clone()))
         //TODO: Is it need to credit with ihr_fee value in internal messages?
     }
 
@@ -413,7 +431,10 @@ pub trait TransactionExecutor {
         libs.push(state_libs);
 
         smc_info.set_mycode(code.clone());
-        let mut vm = VMSetup::new(code.into())
+        if let Some(init_code_hash) = result_acc.init_code_hash() {
+            smc_info.set_init_code_hash(init_code_hash.clone());
+        }
+        let mut vm = VMSetup::with_capabilites(code.into(), self.config().capabilites())
             .set_contract_info_with_config(
                 smc_info,
                 self.config()
@@ -527,6 +548,8 @@ pub trait TransactionExecutor {
         new_data: Option<Cell>,
         is_special: bool,
     ) -> Result<(TrActionPhase, Vec<Message>)> {
+
+        let mut out_msgs = vec![];
         let mut acc_copy = acc.clone();
         let mut acc_remaining_balance = acc_balance.clone();
         let mut phase = TrActionPhase::default();
@@ -538,7 +561,8 @@ pub trait TransactionExecutor {
                     "cannot parse action list: format is invalid, err: {}", 
                     err
                 );
-                // Here you can select only one of 2 error codes: RESULT_CODE_UNKNOWN_OR_INVALID_ACTION or RESULT_CODE_ACTIONLIST_INVALID
+                // Here you can select only one of 2 error codes: 
+                // RESULT_CODE_UNKNOWN_OR_INVALID_ACTION or RESULT_CODE_ACTIONLIST_INVALID
                 phase.result_code = RESULT_CODE_UNKNOWN_OR_INVALID_ACTION;
                 return Ok((phase, vec![]))
             }
@@ -589,6 +613,7 @@ pub trait TransactionExecutor {
                 fail!("get workchains error {}", e)
             }
         };
+
         for (i, action) in actions.iter_mut().enumerate() {
             let err_code = match std::mem::replace(action, OutAction::None) {
                 OutAction::SendMsg{ mode, mut out_msg } => {
@@ -691,7 +716,6 @@ pub trait TransactionExecutor {
             }
         }
 
-        let mut out_msgs = vec![];
         for (i, mode, mut out_msg) in out_msgs0.into_iter() {
             if (mode & SENDMSG_ALL_BALANCE) == 0 {
                 out_msgs.push(out_msg);
@@ -816,12 +840,21 @@ pub trait TransactionExecutor {
             bounce_msg.set_body(builder.into_cell()?.into());
         }
 
-        log::debug!(target: "executor", "bounce fees: {} bounce value: {}", fwd_mine_fees, bounce_msg.get_value().unwrap().grams);
+        log::debug!(
+            target: "executor", 
+            "bounce fees: {} bounce value: {}", 
+            fwd_mine_fees, bounce_msg.get_value().unwrap().grams
+        );
         tr.add_fee_grams(&fwd_mine_fees)?;
         Ok((TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees), Some(bounce_msg)))
     }
 
-    fn add_messages(&self, tr: &mut Transaction, out_msgs: Vec<Message>, lt: Arc<AtomicU64>) -> Result<u64> {
+    fn add_messages(
+        &self, 
+        tr: &mut Transaction, 
+        out_msgs: Vec<Message>, 
+        lt: Arc<AtomicU64>
+    ) -> Result<u64> {
         let mut lt = lt.fetch_add(1 + out_msgs.len() as u64, Ordering::Relaxed);
         lt += 1;
         for mut msg in out_msgs {
@@ -831,6 +864,7 @@ pub trait TransactionExecutor {
         }
         Ok(lt)
     }
+
 }
 
 /// Calculate new account state according to inbound message and current account state.
