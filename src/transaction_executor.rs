@@ -591,11 +591,7 @@ pub trait TransactionExecutor {
                 if err_code == RESULT_CODE_NOT_ENOUGH_GRAMS || err_code == RESULT_CODE_NOT_ENOUGH_EXTRA {
                     phase.no_funds = true;
                 }
-                if err_code == RESULT_CODE_ANYCAST {
-                    fail!("Anycast on dst address")
-                } else {
-                    Ok(true)
-                }
+                Ok(true)
             } else {
                 Ok(false)
             }
@@ -1090,7 +1086,7 @@ fn outmsg_action_handler(
             Err(type_error) => {
                 if type_error == IncorrectCheckRewrite::Anycast {
                     log::warn!(target: "executor", "Incorrect destination anycast address {}", int_header.dst);
-                    return Err(RESULT_CODE_ANYCAST)
+                    return Err(skip.map(|_| RESULT_CODE_ANYCAST).unwrap_or(0))
                 } else {
                     log::warn!(target: "executor", "Incorrect destination address {}", int_header.dst);
                     return Err(skip.map(|_| RESULT_CODE_INCORRECT_DST_ADDRESS).unwrap_or(0))
