@@ -90,11 +90,6 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let account_address = in_msg.dst_ref().ok_or_else(|| ExecutorError::TrExecutorError(
             format!("Input message {:x} has no dst address", in_msg_cell.repr_hash())
         ))?;
-        if revert_anycast {
-            if account_address.rewrite_pfx().is_some() {
-                fail!(ExecutorError::TrExecutorError("Anycast on dst address".to_string()))
-            }
-        }
         let account_id = match account.get_id() {
             Some(account_id) => {
                 log::debug!(target: "executor", "Account = {:x}", account_id);
@@ -129,6 +124,17 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             credit_first: !bounce,
             ..TransactionDescrOrdinary::default()
         };
+
+        if revert_anycast {
+            if account_address.rewrite_pfx().is_some() {
+                description.aborted = true;
+                tr.set_end_status(account.status());
+                params.last_tr_lt.store(lt, Ordering::Relaxed);
+                account.set_last_tr_time(lt);
+                tr.write_description(&TransactionDescr::Ordinary(description))?;
+                return Ok(tr);
+            }
+        }
 
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
