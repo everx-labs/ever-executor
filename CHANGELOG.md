@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Version: 1.15.60
+## Version: 1.15.61
 
 ### New
 
