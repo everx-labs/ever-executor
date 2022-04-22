@@ -8,7 +8,7 @@ version = '1.15.61'
 failure = '0.1.6'
 lazy_static = '1.4.0'
 log = '0.4.8'
-ton_block = { git = 'https://github.com/tonlabs/ton-labs-block.git', tag = '1.7.41' }
+ton_block = { git = 'https://github.com/tonlabs/ton-labs-block.git', tag = '1.7.42' }
 ton_types = { git = 'https://github.com/tonlabs/ton-labs-types.git', tag = '1.10.14' }
 ton_vm = { git = 'https://github.com/tonlabs/ton-labs-vm.git', tag = '1.8.33' }
 
