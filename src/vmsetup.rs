@@ -50,14 +50,12 @@ impl VMSetup {
         sci: SmartContractInfo, 
         config: &BlockchainConfig
     ) -> Result<VMSetup> {
-        self.ctrls.put(7, &mut sci.into_temp_data_with_init_code_hash(
-            config.has_capability(ton_block::GlobalCapabilities::CapInitCodeHash),
-            config.has_capability(ton_block::GlobalCapabilities::CapMycode)
-        ))?;
+        self.ctrls.put(7, &mut sci.into_temp_data_with_capabilities(config.capabilites()))?;
         Ok(self)
     }
 
     /// Sets SmartContractInfo for TVM register c7
+    #[deprecated]
     pub fn set_contract_info(
         mut self, 
         sci: SmartContractInfo, 

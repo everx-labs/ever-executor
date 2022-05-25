@@ -12,8 +12,8 @@
 */
 
 use crate::{
-    blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError, ExecuteParams,
-    TransactionExecutor, VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES
+    ActionPhaseResult, blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError,
+    ExecuteParams, TransactionExecutor, VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES
 };
 #[cfg(feature = "timings")]
 use std::sync::atomic::AtomicU64;
@@ -29,6 +29,7 @@ use ton_vm::{
     boolean, int,
     stack::{integer::IntegerData, Stack, StackItem},
 };
+
 
 
 
@@ -157,6 +158,12 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 )
             };
         }
+        let due_before_storage = if let Some(due) = account.due_payment() {
+            due.0
+        } else {
+            0
+        };
+        let storage_fees_collected;
         description.storage_ph = match self.storage_phase(
             account,
             &mut acc_balance,
@@ -164,7 +171,14 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             is_masterchain,
             is_special
         ) {
-            Ok(storage_ph) => Some(storage_ph),
+            Ok(storage_ph) => {
+                storage_fees_collected = storage_ph.storage_fees_collected.0 + if let Some(due) = &storage_ph.storage_fees_due {
+                    due.0
+                } else {
+                    0
+                } - due_before_storage;   
+                Some(storage_ph)
+            },
             Err(e) => fail!(
                 ExecutorError::TrExecutorError(
                     format!("cannot create storage phase of a new transaction for smart contract for reason {}", e)
@@ -220,9 +234,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             params.state_libs,
             smci,
             stack,
+            storage_fees_collected,
             is_masterchain,
             is_special,
-            params.debug
+            params.debug,
+            params.trace_callback
         ) {
             Ok((compute_ph, actions, new_data)) => (compute_ph, actions, new_data),
             Err(e) =>
@@ -240,6 +256,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let mut out_msgs = vec![];
         let mut action_phase_processed = false;
         let mut compute_phase_gas_fees = Grams(0);
+        let mut copyleft = None;
         description.compute_ph = compute_ph;
         description.action = match &description.compute_ph {
             TrComputePhase::Vm(phase) => {
@@ -251,7 +268,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     action_phase_processed = true;
                     // since the balance is not used anywhere else if we have reached this point, 
                     // then we can change it here
-                    match self.action_phase(
+                    match self.action_phase_with_copyleft(
                         &mut tr,
                         account,
                         &original_acc_balance,
@@ -262,9 +279,13 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                         new_data,
                         is_special
                     ) {
-                        Ok((action_ph, msgs)) => {
-                            out_msgs = msgs;
-                            Some(action_ph)
+                        Ok(ActionPhaseResult{phase, messages, copyleft_reward}) => {
+                            out_msgs = messages;
+                            if let Some(copyleft_reward) = &copyleft_reward {
+                                tr.total_fees_mut().grams.sub(&copyleft_reward.reward)?;
+                            }
+                            copyleft = copyleft_reward;
+                            Some(phase)
                         }
                         Err(e) => fail!(
                             ExecutorError::TrExecutorError(
@@ -376,6 +397,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         tr.write_description(&TransactionDescr::Ordinary(description))?;
         #[cfg(feature="timings")]
         self.timings[2].fetch_add(now.elapsed().as_micros() as u64, Ordering::SeqCst);
+        tr.set_copyleft_reward(copyleft);
         Ok(tr)
     }
     fn ordinary_transaction(&self) -> bool { true }

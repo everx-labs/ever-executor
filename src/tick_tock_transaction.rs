@@ -11,10 +11,7 @@
 * limitations under the License.
 */
 
-use crate::{
-    blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecutor, 
-    error::ExecutorError
-};
+use crate::{blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecutor, error::ExecutorError, ActionPhaseResult};
 
 use std::sync::{atomic::Ordering, Arc};
 use ton_block::{
@@ -77,6 +74,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         tr.set_logical_time(lt);
         tr.set_now(params.block_unixtime);
         account.set_last_paid(0);
+        let due_before_storage = if let Some(due) = account.due_payment() {
+            due.0
+        } else {
+            0
+        };
+        let storage_fees_collected;
         let storage = match self.storage_phase(
             account,
             &mut acc_balance,
@@ -84,7 +87,14 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             is_masterchain,
             is_special,
         ) {
-            Ok(storage_ph) => storage_ph,
+            Ok(storage_ph) => {
+                storage_fees_collected = storage_ph.storage_fees_collected.0 + if let Some(due) = &storage_ph.storage_fees_due {
+                    due.0 
+                } else {
+                    0
+                } - due_before_storage;
+                storage_ph
+            },
             Err(e) => fail!(
                 ExecutorError::TrExecutorError(
                     format!(
@@ -126,9 +136,11 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             params.state_libs,
             smci,
             stack,
+            storage_fees_collected,
             is_masterchain,
             is_special,
-            params.debug
+            params.debug,
+            params.trace_callback,
         ) {
             Ok((compute_ph, actions, new_data)) => (compute_ph, actions, new_data),
             Err(e) =>
@@ -150,7 +162,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", lt);
-                    match self.action_phase(
+                    match self.action_phase_with_copyleft(
                         &mut tr, 
                         account, 
                         &original_acc_balance, 
@@ -161,9 +173,10 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                         new_data, 
                         is_special
                     ) {
-                        Ok((action_ph, msgs)) => {
-                            out_msgs = msgs;
-                            Some(action_ph)
+                        Ok(ActionPhaseResult{phase, messages, .. }) => {
+                            out_msgs = messages;
+                            // ignore copyleft reward because account is special
+                            Some(phase)
                         }
                         Err(e) => fail!(
                             ExecutorError::TrExecutorError(

@@ -14,30 +14,38 @@
 
 use crate::{
     blockchain_config::{BlockchainConfig, CalcMsgFwdFees},
-    error::ExecutorError, vmsetup::VMSetup,
+    error::ExecutorError,
+    vmsetup::VMSetup,
 };
+use std::collections::LinkedList;
 
-use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
-use ton_block::{
-    AccStatusChange, Account, AccountStatus, AddSub, ComputeSkipReason, CurrencyCollection, 
-    Deserializable, GasLimitsPrices, GetRepresentationHash, GlobalCapabilities, Grams, 
-    HashUpdate, Message, MsgAddressInt, OutAction, OutActions, Serializable, StorageUsedShort, 
-    TrActionPhase, TrBouncePhase, TrComputePhase, TrComputePhaseVm, TrCreditPhase, TrStoragePhase, 
-    Transaction, WorkchainFormat, BASE_WORKCHAIN_ID, MASTERCHAIN_ID, RESERVE_ALL_BUT, 
-    RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG, RESERVE_REVERSE, RESERVE_VALID_MODES, 
-    SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY, SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY,
-    SENDMSG_REMAINING_MSG_BALANCE, SENDMSG_VALID_FLAGS
-};
-use ton_types::{
-    error, fail, ExceptionCode, Cell, Result, HashmapE, HashmapType, IBitstring, UInt256
-};
-use ton_vm::{
-    error::tvm_exception, executor::gas::gas_state::Gas,
-    smart_contract_info::SmartContractInfo,
-    stack::{Stack, StackItem},
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
 };
 use ton_block::MsgAddressInt::AddrStd;
 use ton_block::MsgAddressInt::AddrVar;
+use ton_block::{
+    AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, ComputeSkipReason,
+    CopyleftReward, CurrencyCollection, Deserializable, ExtraCurrencyCollection, GasLimitsPrices,
+    GetRepresentationHash, GlobalCapabilities, Grams, HashUpdate, Message, MsgAddressInt,
+    OutAction, OutActions, Serializable, StorageUsedShort, TrActionPhase, TrBouncePhase,
+    TrComputePhase, TrComputePhaseVm, TrCreditPhase, TrStoragePhase, Transaction, WorkchainFormat,
+    BASE_WORKCHAIN_ID, MASTERCHAIN_ID, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG,
+    RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
+    SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_REMAINING_MSG_BALANCE,
+    SENDMSG_VALID_FLAGS,
+};
+use ton_types::{
+    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256,
+};
+use ton_vm::executor::{Engine, EngineTraceInfo};
+use ton_vm::{
+    error::tvm_exception,
+    executor::gas::gas_state::Gas,
+    smart_contract_info::SmartContractInfo,
+    stack::{Stack, StackItem},
+};
 
 const RESULT_CODE_ACTIONLIST_INVALID:            i32 = 32;
 const RESULT_CODE_TOO_MANY_ACTIONS:              i32 = 33;
@@ -49,6 +57,7 @@ const RESULT_CODE_NOT_ENOUGH_EXTRA:              i32 = 38;
 const RESULT_CODE_INVALID_BALANCE:               i32 = 40;
 const RESULT_CODE_BAD_ACCOUNT_STATE:             i32 = 41;
 const RESULT_CODE_ANYCAST:                       i32 = 50;
+const RESULT_CODE_NOT_FOUND_LICENSE:             i32 = 51;
 const RESULT_CODE_UNSUPPORTED:                   i32 = -1;
 
 const MAX_ACTIONS: usize = 255;
@@ -64,13 +73,31 @@ pub enum IncorrectCheckRewrite {
 
 
 
+
 pub struct ExecuteParams {
     pub state_libs: HashmapE,
     pub block_unixtime: u32,
     pub block_lt: u64,
     pub last_tr_lt: Arc<AtomicU64>,
     pub seed_block: UInt256,
-    pub debug: bool
+    pub debug: bool,
+    pub trace_callback: Option<Arc<dyn Fn(&Engine, &EngineTraceInfo) + Send + Sync>>,
+}
+
+pub struct ActionPhaseResult {
+    pub phase: TrActionPhase,
+    pub messages: Vec<Message>,
+    pub copyleft_reward: Option<CopyleftReward>,
+}
+
+impl ActionPhaseResult {
+    fn new(phase: TrActionPhase, messages: Vec<Message>, copyleft_reward: Option<CopyleftReward>) -> ActionPhaseResult {
+        ActionPhaseResult{phase, messages, copyleft_reward}
+    }
+
+    fn from_phase(phase: TrActionPhase) -> ActionPhaseResult {
+        ActionPhaseResult::new(phase, vec![], None)
+    }
 }
 
 impl ExecuteParams {
@@ -81,7 +108,8 @@ impl ExecuteParams {
             block_lt: 0,
             last_tr_lt: Arc::new(AtomicU64::new(0)),
             seed_block: UInt256::default(),
-            debug: false
+            debug: false,
+            trace_callback: None,
         }
     }
 }
@@ -113,6 +141,7 @@ pub trait TransactionExecutor {
             last_tr_lt,
             seed_block: UInt256::default(),
             debug,
+            ..ExecuteParams::default()
         };
         let mut account_root = account.serialize()?;
         let transaction = self.execute_with_libs_and_params(in_msg, &mut account_root, params)?;
@@ -162,6 +191,7 @@ pub trait TransactionExecutor {
             last_tr_lt,
             seed_block: UInt256::default(),
             debug,
+            ..ExecuteParams::default()
         };
         self.execute_with_libs_and_params(in_msg, account_root, params)
     }
@@ -183,6 +213,7 @@ pub trait TransactionExecutor {
             last_tr_lt,
             seed_block: UInt256::default(),
             debug,
+            ..ExecuteParams::default()
         };
         self.execute_with_libs_and_params(in_msg, account_root, params)
     }
@@ -278,6 +309,7 @@ pub trait TransactionExecutor {
             if need_delete {
                 tr.total_fees_mut().add(acc_balance)?;
                 *acc = Account::default();
+                acc_balance.other = Default::default();
                 Ok(TrStoragePhase::with_params(storage_fees_collected, Some(fee), AccStatusChange::Deleted))
             } else if need_freeze {
                 acc.set_due_payment(Some(fee.clone()));
@@ -347,9 +379,11 @@ pub trait TransactionExecutor {
         state_libs: HashmapE, // masterchain libraries
         mut smc_info: SmartContractInfo,
         stack: Stack,
+        storage_fees_collected: u128,
         is_masterchain: bool,
         is_special: bool,
         debug: bool,
+        trace_callback: Option<Arc<dyn Fn(&Engine, &EngineTraceInfo) + Send + Sync>>,
     ) -> Result<(TrComputePhase, Option<Cell>, Option<Cell>)> {
         let mut result_acc = acc.clone();
         let mut vm_phase = TrComputePhaseVm::default();
@@ -431,6 +465,7 @@ pub trait TransactionExecutor {
         libs.push(state_libs);
 
         smc_info.set_mycode(code.clone());
+        smc_info.set_storage_fee(storage_fees_collected);
         if let Some(init_code_hash) = result_acc.init_code_hash() {
             smc_info.set_init_code_hash(init_code_hash.clone());
         }
@@ -447,6 +482,10 @@ pub trait TransactionExecutor {
             .create();
 
         //TODO: set vm_init_state_hash
+
+        if let Some(trace_callback) = trace_callback  {
+            vm.set_trace_callback(move |engine, info| trace_callback(engine, info));
+        }
 
         let result = vm.execute();
         log::trace!(target: "executor", "execute result: {:?}", result);
@@ -536,6 +575,7 @@ pub trait TransactionExecutor {
     /// substracted from account balance. If account has enough funds this 
     /// will be succeded, otherwise action phase is failed, transaction will be
     /// marked as aborted, account changes will be rollbacked.
+    #[deprecated]
     fn action_phase(
         &self,
         tr: &mut Transaction,
@@ -548,7 +588,24 @@ pub trait TransactionExecutor {
         new_data: Option<Cell>,
         is_special: bool,
     ) -> Result<(TrActionPhase, Vec<Message>)> {
+        let result = self.action_phase_with_copyleft(
+            tr, acc, original_acc_balance, acc_balance, msg_remaining_balance,
+            compute_phase_fees, actions_cell, new_data, is_special)?;
+        Ok((result.phase, result.messages))
+    }
 
+    fn action_phase_with_copyleft(
+        &self,
+        tr: &mut Transaction,
+        acc: &mut Account,
+        original_acc_balance: &CurrencyCollection,
+        acc_balance: &mut CurrencyCollection,
+        msg_remaining_balance: &mut CurrencyCollection,
+        compute_phase_fees: &Grams,
+        actions_cell: Cell,
+        new_data: Option<Cell>,
+        is_special: bool,
+    ) -> Result<ActionPhaseResult> {
         let mut out_msgs = vec![];
         let mut acc_copy = acc.clone();
         let mut acc_remaining_balance = acc_balance.clone();
@@ -564,7 +621,7 @@ pub trait TransactionExecutor {
                 // Here you can select only one of 2 error codes: 
                 // RESULT_CODE_UNKNOWN_OR_INVALID_ACTION or RESULT_CODE_ACTIONLIST_INVALID
                 phase.result_code = RESULT_CODE_UNKNOWN_OR_INVALID_ACTION;
-                return Ok((phase, vec![]))
+                return Ok(ActionPhaseResult::from_phase(phase))
             }
             Ok(actions) => actions
         };
@@ -572,7 +629,7 @@ pub trait TransactionExecutor {
         if actions.len() > MAX_ACTIONS {
             log::debug!(target: "executor", "too many actions: {}", actions.len());
             phase.result_code = RESULT_CODE_TOO_MANY_ACTIONS;
-            return Ok((phase, vec![]))
+            return Ok(ActionPhaseResult::from_phase(phase))
         }
         phase.action_list_hash = actions.hash()?;
         phase.tot_actions = actions.len() as i16;
@@ -610,7 +667,18 @@ pub trait TransactionExecutor {
             }
         };
 
+        let copyleft_reward = self.copyleft_action_handler(compute_phase_fees, &mut phase, &actions)?;
+        if phase.result_code != 0 {
+            return Ok(ActionPhaseResult::from_phase(phase));
+        }
+
         for (i, action) in actions.iter_mut().enumerate() {
+            log::debug!(target: "executor", "\nAction #{}\nType: {}\nInitial balance: {}",
+                i,
+                action_type(action),
+                balance_to_string(&acc_remaining_balance)
+            );
+            let mut init_balance = acc_remaining_balance.clone();
             let err_code = match std::mem::replace(action, OutAction::None) {
                 OutAction::SendMsg{ mode, mut out_msg } => {
                     if let Some(header) = out_msg.int_header() {
@@ -651,6 +719,7 @@ pub trait TransactionExecutor {
                     }
                     if (mode & SENDMSG_ALL_BALANCE) != 0 {
                         out_msgs0.push((i, mode, out_msg));
+                        log::debug!(target: "executor", "Message with flag `SEND_ALL_BALANCE` it will be sent last. Skip it for now.");
                         continue
                     }
                     let result = outmsg_action_handler(
@@ -705,10 +774,16 @@ pub trait TransactionExecutor {
                         Some(code) => code
                     }
                 }
+                OutAction::CopyLeft {..} => {0}
                 OutAction::None => RESULT_CODE_UNKNOWN_OR_INVALID_ACTION
             };
+            init_balance.sub(&acc_remaining_balance)?;
+            log::debug!(target: "executor", "Final balance:   {}\nDelta:           {}",
+                balance_to_string(&acc_remaining_balance),
+                balance_to_string(&init_balance)
+            );
             if process_err_code(err_code, i, &mut phase)? {
-                return Ok((phase, vec![]))
+                return Ok(ActionPhaseResult::new(phase, vec![], copyleft_reward))
             }
         }
 
@@ -717,6 +792,8 @@ pub trait TransactionExecutor {
                 out_msgs.push(out_msg);
                 continue
             }
+            log::debug!(target: "executor", "\nSend message with all balance:\nInitial balance: {}",
+                balance_to_string(&acc_remaining_balance));
             let result = outmsg_action_handler(
                 &mut phase,
                 mode,
@@ -730,6 +807,7 @@ pub trait TransactionExecutor {
                 &total_reserved_value,
                 &mut account_deleted
             );
+            log::debug!(target: "executor", "Final balance:   {}", balance_to_string(&acc_remaining_balance));
             let err_code = match result {
                 Ok(_) => {
                     phase.msgs_created += 1;
@@ -739,22 +817,29 @@ pub trait TransactionExecutor {
                 Err(code) => code
             };
             if process_err_code(err_code, i, &mut phase)? {
-                return Ok((phase, vec![]));
+                return Ok(ActionPhaseResult::new(phase, vec![], copyleft_reward));
             }
         }
 
         //calc new account balance
+        log::debug!(target: "executor", "\nReturn reserved balance:\nInitial:  {}\nReserved: {}",
+            balance_to_string(&acc_remaining_balance),
+            balance_to_string(&total_reserved_value)
+        );
         if let Err(err) = acc_remaining_balance.add(&total_reserved_value) {
             log::debug!(target: "executor", "failed to add account balance with reserved value {}", err);
             fail!("failed to add account balance with reserved value {}", err)
         }
 
+        log::debug!(target: "executor", "Final:    {}", balance_to_string(&acc_remaining_balance));
+
         if let Some(fee) = phase.total_action_fees.as_ref() {
-            log::debug!(target: "executor", "action fees: {}", fee);
+            log::debug!(target: "executor", "Total action fees: {}", fee);
             tr.add_fee_grams(fee)?;
         }
 
         if account_deleted {
+            log::debug!(target: "executor", "\nAccount deleted");
             phase.status_change = AccStatusChange::Deleted;
         }
         phase.valid = true;
@@ -764,7 +849,7 @@ pub trait TransactionExecutor {
         if let Some(new_data) = new_data {
             acc.set_data(new_data);
         }
-        Ok((phase, out_msgs))
+        Ok(ActionPhaseResult::new(phase, out_msgs, copyleft_reward))
     }
 
     /// Implementation of transaction's bounce phase.
@@ -799,12 +884,44 @@ pub trait TransactionExecutor {
             }
         }
 
+        // create header for new bounced message and swap src and dst addresses
+        header.ihr_disabled = true;
+        header.bounce = false;
+        header.bounced = true;
+        header.ihr_fee = Grams::zero();
+
+        let mut bounce_msg = Message::with_int_header(header);
+        if self.config().has_capability(GlobalCapabilities::CapBounceMsgBody) {
+            let mut builder = (-1i32).write_to_new_cell()?;
+            if let Some(body) = msg.body() {
+                let mut body_copy = body.clone();
+                body_copy.shrink_data(0..256);
+                builder.append_bytestring(&body_copy)?;
+                if self.config().has_capability(GlobalCapabilities::CapFullBodyInBounced) {
+                    builder.append_reference_cell(body.into_cell());
+                }
+            }
+            bounce_msg.set_body(builder.into_cell()?.into());
+            if self.config().has_capability(GlobalCapabilities::CapFullBodyInBounced) {
+                if let Some(init) = msg.state_init() {
+                    bounce_msg.set_state_init(init.clone());
+                }
+            }
+        }
+
         // calculated storage for bounced message is empty
-        let storage = StorageUsedShort::default();
+        let serialized_message = bounce_msg.serialize()?;
+        let mut storage = StorageUsedShort::default();
+        storage.append(&serialized_message);
+        let storage_bits = storage.bits() - serialized_message.bit_length() as u64;
+        let storage_cells = storage.cells() - 1;
+        let storage = StorageUsedShort::with_values_checked(storage_cells, storage_bits)?;
         let fwd_prices = self.config().get_fwd_prices(msg.is_masterchain());
-        let fwd_full_fees = fwd_prices.fwd_fee(&Cell::default());
+        let fwd_full_fees = fwd_prices.fwd_fee(&serialized_message);
         let fwd_mine_fees = fwd_prices.mine_fee(&fwd_full_fees);
         let fwd_fees = Grams::from(fwd_full_fees.0 - fwd_mine_fees.0);
+
+        log::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees, remaining_msg_balance);
 
         if remaining_msg_balance.grams.0 < fwd_full_fees.0 + compute_phase_fees.0 {
             log::debug!(
@@ -814,26 +931,15 @@ pub trait TransactionExecutor {
             return Ok((TrBouncePhase::no_funds(storage, fwd_full_fees), None))
         }
 
-        // create header for new bounced message and swap src and dst addresses
-        log::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees, remaining_msg_balance);
         acc_balance.sub(&remaining_msg_balance)?;
         remaining_msg_balance.grams.sub(&fwd_full_fees)?;
         remaining_msg_balance.grams.sub(&compute_phase_fees)?;
-        header.ihr_disabled = true;
-        header.bounce = false;
-        header.bounced = true;
-        header.ihr_fee = Grams::zero();
-        header.fwd_fee = fwd_fees.clone();
-        header.value = remaining_msg_balance.clone();
-
-        let mut bounce_msg = Message::with_int_header(header);
-        if self.config().has_capability(GlobalCapabilities::CapBounceMsgBody) {
-            let mut builder = (-1i32).write_to_new_cell()?;
-            if let Some(mut body) = msg.body() {
-                body.shrink_data(0..256);
-                builder.append_bytestring(&body)?;
-            }
-            bounce_msg.set_body(builder.into_cell()?.into());
+        match bounce_msg.header_mut() {
+            CommonMsgInfo::IntMsgInfo(header) => {
+                header.value = remaining_msg_balance.clone();
+                header.fwd_fee = fwd_fees.clone();
+            },
+            _ => fail!("Error during getting message header")
         }
 
         log::debug!(
@@ -843,6 +949,55 @@ pub trait TransactionExecutor {
         );
         tr.add_fee_grams(&fwd_mine_fees)?;
         Ok((TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees), Some(bounce_msg)))
+    }
+
+    fn copyleft_action_handler(
+        &self,
+        compute_phase_fees: &Grams,
+        mut phase: &mut TrActionPhase,
+        actions: &LinkedList<OutAction>,
+    ) -> Result<Option<CopyleftReward>> {
+        let mut copyleft_reward = Grams(0);
+        let mut copyleft_address = AccountId::default();
+        let mut was_copyleft_instruction = false;
+
+        for (i, action) in actions.iter().enumerate() {
+            if let OutAction::CopyLeft { license, address } = action {
+                if was_copyleft_instruction {
+                    fail!("Duplicated copyleft action")
+                }
+                let copyleft_config = self.config().raw_config().copyleft_config()?;
+                phase.spec_actions += 1;
+                if let Some(copyleft_percent) = copyleft_config.license_rates.get(license)? {
+                    if copyleft_percent >= 100 {
+                        fail!(
+                            "copyleft percent on license {} is too big {}",
+                            license, copyleft_percent
+                        )
+                    }
+                    log::debug!(
+                        target: "executor",
+                        "Found copyleft action: license: {}, address: {}",
+                        license, address
+                    );
+                    copyleft_reward =
+                        Grams((compute_phase_fees.0 * copyleft_percent as u128) / 100);
+                    copyleft_address = address.clone();
+                    was_copyleft_instruction = true;
+                } else {
+                    log::debug!(target: "executor", "Not found license {} in config", license);
+                    phase.result_code = RESULT_CODE_NOT_FOUND_LICENSE;
+                    phase.result_arg = Some(i as i32);
+                    return Ok(None)
+                }
+            }
+        }
+
+        if was_copyleft_instruction && !copyleft_reward.is_zero() {
+            Ok(Some(CopyleftReward{reward: copyleft_reward, address: copyleft_address}))
+        } else {
+            Ok(None)
+        }
     }
 
     fn add_messages(
@@ -903,7 +1058,7 @@ fn compute_new_state(acc: &mut Account, acc_balance: &CurrencyCollection, in_msg
             log::debug!(target: "executor", "AccountFrozen");
             //account balance was credited and if it positive after that
             //and inbound message bear code and data then make some check and unfreeze account
-            if !acc_balance.grams.is_zero() {
+            if !acc_balance.grams.is_zero() { // This check is redundant
                 if let Some(state_init) = in_msg.state_init() {
                     log::debug!(target: "executor", "message for frozen: activated");
                     return match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
@@ -1160,7 +1315,6 @@ fn outmsg_action_handler(
         return Err(-1)
     }
 
-    log::debug!(target: "executor", "sub funds {} from {}", result_value, acc_balance.grams);
     if acc_balance.grams.0 < result_value.grams.0 {
         log::warn!(
             target: "executor", 
@@ -1178,6 +1332,20 @@ fn outmsg_action_handler(
         }
         _ => ()
     }
+    let mut acc_balance_copy = ExtraCurrencyCollection::default();
+    match acc_balance.other.iterate_with_keys(|key: u32, b| -> Result<bool> {
+        if b != 0.into() {
+            acc_balance_copy.set(&key, &b)?;
+        }
+        Ok(true)
+    }) {
+        Ok(false) | Err(_) => {
+            log::warn!(target: "executor", "Cannot reduce account extra balance");
+            return Err(skip.map(|_| RESULT_CODE_INVALID_BALANCE).unwrap_or(0))
+        }
+        _ => ()
+    }
+    std::mem::swap(&mut acc_balance.other, &mut acc_balance_copy);
 
     if (mode & SENDMSG_DELETE_IF_EMPTY) != 0
     && (mode & SENDMSG_ALL_BALANCE) != 0
@@ -1210,7 +1378,15 @@ fn outmsg_action_handler(
         *msg_balance = CurrencyCollection::default();
     }
 
-    log::info!(target: "executor", "msg with flags: {} exports value {}", mode, result_value.grams.0);
+    log::debug!(target: "executor", "Message details:\n\tFlag: {}\n\tValue: {}\n\tSource: {}\n\tDestination: {}\n\tBody: {}\n\tStateInit: {}",
+        mode,
+        balance_to_string(&result_value),
+        msg.src().map_or("None".to_string(), |addr| addr.to_string()),
+        msg.dst().map_or("None".to_string(), |addr| addr.to_string()),
+        msg.body().map_or("None".to_string(), |data| data.to_string()),
+        msg.state_init().map_or("None".to_string(), |_| "Present".to_string())
+    );
+
     Ok(result_value)
 }
 
@@ -1226,6 +1402,7 @@ fn reserve_action_handler(
     if mode & !RESERVE_VALID_MODES != 0 {
         return Err(RESULT_CODE_UNKNOWN_OR_INVALID_ACTION);
     }
+    log::debug!(target: "executor", "Reserve with mode = {} value = {}", mode, balance_to_string(val));
 
     let mut reserved;
     if mode & RESERVE_PLUS_ORIG != 0 {
@@ -1254,10 +1431,13 @@ fn reserve_action_handler(
     }
 
     let mut remaining = acc_remaining_balance.clone();
+    if remaining.grams.0 < reserved.grams.0 {
+        return Err(RESULT_CODE_NOT_ENOUGH_GRAMS)
+    }
     let result = remaining.sub(&reserved);
     match result {
         Err(_) => return Err(RESULT_CODE_INVALID_BALANCE),
-        Ok(false) => return Err(RESULT_CODE_NOT_ENOUGH_GRAMS),
+        Ok(false) => return Err(RESULT_CODE_NOT_ENOUGH_EXTRA),
         Ok(true) => ()
     }
     std::mem::swap(&mut remaining, acc_remaining_balance);
@@ -1271,7 +1451,11 @@ fn reserve_action_handler(
 }
 
 fn setcode_action_handler(acc: &mut Account, code: Cell) -> Option<i32> {
-    log::debug!(target: "executor", "OutAction::SetCode {}", code);
+    log::debug!(target: "executor", "OutAction::SetCode {}\nPrevious code hash: {}\nNew code hash:      {}",
+        code,
+        acc.get_code().unwrap_or_default().repr_hash().to_hex_string(),
+        code.repr_hash().to_hex_string(),
+    );
     match acc.set_code(code) {
         true => None,
         false => Some(RESULT_CODE_BAD_ACCOUNT_STATE)
@@ -1338,10 +1522,6 @@ fn account_from_message(
     init_code_hash: bool
 ) -> Option<Account> {
     let hdr = msg.int_header()?;
-    if msg_remaining_balance.grams.is_zero() {
-        log::trace!(target: "executor", "The message has no money");
-        return None
-    }
     if let Some(init) = msg.state_init() {
         if init.code().is_some() {
             if !check_address || (init.hash().ok()? == hdr.dst.address()) {
@@ -1370,5 +1550,26 @@ fn account_from_message(
         None
     } else {
         Some(Account::uninit(hdr.dst.clone(), 0, 0, msg_remaining_balance.clone()))
+    }
+}
+
+fn balance_to_string(balance: &CurrencyCollection) -> String {
+    let value = balance.grams.0;
+    format!("{}.{:03} {:03} {:03}      ({})",
+            value / 1e9 as u128,
+            (value % 1e9 as u128) / 1e6 as u128,
+            (value % 1e6 as u128) / 1e3 as u128,
+            value % 1e3 as u128,
+            value,
+    )
+}
+
+fn action_type(action: &OutAction) -> String {
+    match action {
+        OutAction::SendMsg {mode:_, out_msg:_} => "SendMsg".to_string(),
+        OutAction::SetCode {new_code:_} => "SetCode".to_string(),
+        OutAction::ReserveCurrency {mode:_, value:_} => "ReserveCurrency".to_string(),
+        OutAction::ChangeLibrary {mode:_, code:_, hash:_} => "ChangeLibrary".to_string(),
+        _ => "Unknown".to_string()
     }
 }
