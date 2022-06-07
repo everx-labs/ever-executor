@@ -16,12 +16,12 @@ use crate::{blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecu
 use std::sync::{atomic::Ordering, Arc};
 use ton_block::{
     Account, CurrencyCollection, Grams, Message, TrComputePhase, Transaction, 
-    TransactionDescr, TransactionDescrTickTock, TransactionTickTock
+    TransactionDescr, TransactionDescrTickTock, TransactionTickTock, Serializable
 };
-use ton_types::{error, fail, Result};
+use ton_types::{error, fail, Result, HashmapType};
 use ton_vm::{
     boolean, int,
-    stack::{integer::IntegerData, Stack, StackItem},
+    stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
 };
 
 pub struct TickTockTransactionExecutor {
@@ -67,20 +67,15 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let is_masterchain = true;
         let is_special = true;
         let lt = std::cmp::max(
-            account.last_tr_time().unwrap_or(0), 
+            account.last_tr_time().unwrap_or_default(), 
             params.last_tr_lt.load(Ordering::Relaxed)
         );
         let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
         tr.set_logical_time(lt);
         tr.set_now(params.block_unixtime);
         account.set_last_paid(0);
-        let due_before_storage = if let Some(due) = account.due_payment() {
-            due.0
-        } else {
-            0
-        };
-        let storage_fees_collected;
-        let storage = match self.storage_phase(
+        let due_before_storage = account.due_payment().map_or(0, |due| due.as_u128());
+        let (storage, storage_fee) = match self.storage_phase(
             account,
             &mut acc_balance,
             &mut tr,
@@ -88,12 +83,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             is_special,
         ) {
             Ok(storage_ph) => {
-                storage_fees_collected = storage_ph.storage_fees_collected.0 + if let Some(due) = &storage_ph.storage_fees_due {
-                    due.0 
-                } else {
-                    0
-                } - due_before_storage;
-                storage_ph
+                let mut storage_fee = storage_ph.storage_fees_collected.as_u128();
+                if let Some(due) = &storage_ph.storage_fees_due {
+                    storage_fee += due.as_u128()
+                }
+                storage_fee -= due_before_storage;
+                (storage_ph, storage_fee)
             },
             Err(e) => fail!(
                 ExecutorError::TrExecutorError(
@@ -113,30 +108,35 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let old_account = account.clone();
         let original_acc_balance = acc_balance.clone();
 
-        log::debug!(target: "executor", "compute_phase {}", lt);
-        let smci = self.build_contract_info(
-            &acc_balance, 
-            &account_address, 
-            params.block_unixtime, 
-            params.block_lt, 
-            lt, 
-            params.seed_block
-        );
+        let config_params = self.config().raw_config().config_params.data().cloned();
+        let mut smc_info = SmartContractInfo {
+            capabilities: self.config().raw_config().capabilities(),
+            myself: account_address.serialize().unwrap_or_default().into(),
+            block_lt: params.block_lt,
+            trans_lt: lt,
+            unix_time: params.block_unixtime,
+            seq_no: params.seq_no,
+            balance: acc_balance.clone(),
+            config_params,
+            ..Default::default()
+        };
+        smc_info.calc_rand_seed(params.seed_block, &account_address.address().get_bytestring(0));
         let mut stack = Stack::new();
         stack
-            .push(int!(account.balance().map(|value| value.grams.0).unwrap_or_default()))
+            .push(int!(account.balance().map_or(0, |value| value.grams.as_u128())))
             .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.get_bytestring(0))))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
+        log::debug!(target: "executor", "compute_phase {}", lt);
         let (compute_ph, actions, new_data) = match self.compute_phase(
             None, 
             account,
             &mut acc_balance,
             &CurrencyCollection::default(),
             params.state_libs,
-            smci,
+            smc_info,
             stack,
-            storage_fees_collected,
+            storage_fee,
             is_masterchain,
             is_special,
             params.debug,
@@ -168,7 +168,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                         &original_acc_balance, 
                         &mut acc_balance, 
                         &mut CurrencyCollection::default(), 
-                        &Grams(0), 
+                        &Grams::zero(), 
                         actions.unwrap_or_default(), 
                         new_data, 
                         is_special
@@ -226,11 +226,11 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     fn ordinary_transaction(&self) -> bool { false }
     fn config(&self) -> &BlockchainConfig { &self.config }
     fn build_stack(&self, _in_msg: Option<&Message>, account: &Account) -> Stack {
-        let account_balance = account.balance().map(|balance| balance.grams.clone()).unwrap();
+        let account_balance = account.balance().unwrap().grams.as_u128();
         let account_id = account.get_id().unwrap();
         let mut stack = Stack::new();
         stack
-            .push(int!(account_balance.0))
+            .push(int!(account_balance))
             .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.get_bytestring(0))))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));

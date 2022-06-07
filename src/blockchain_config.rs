@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2021 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -51,10 +51,18 @@ impl TONDefaultConfig for MsgForwardPrices {
 }
 
 pub trait CalcMsgFwdFees {
-    fn fwd_fee(&self, msg_cell: &Cell) -> Grams;
-    fn ihr_fee (&self, fwd_fee: &Grams) -> Grams;
-    fn mine_fee(&self, fwd_fee: &Grams) -> Grams;
-    fn next_fee(&self, fwd_fee: &Grams) -> Grams;
+    #[deprecated]
+    fn fwd_fee(&self, msg_cell: &Cell) -> Grams {self.fwd_fee_checked(msg_cell).unwrap_or_default()}
+    #[deprecated]
+    fn ihr_fee(&self, fwd_fee: &Grams) -> Grams {self.ihr_fee_checked(fwd_fee).unwrap_or_default()}
+    #[deprecated]
+    fn mine_fee(&self, fwd_fee: &Grams) -> Grams {self.mine_fee_checked(fwd_fee).unwrap_or_default()}
+    #[deprecated]
+    fn next_fee(&self, fwd_fee: &Grams) -> Grams {self.next_fee_checked(fwd_fee).unwrap_or_default()}
+    fn fwd_fee_checked(&self, msg_cell: &Cell) -> Result<Grams>;
+    fn ihr_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
+    fn mine_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
+    fn next_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
 }
 
 impl CalcMsgFwdFees for MsgForwardPrices {
@@ -62,7 +70,7 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// Forward fee is calculated according to the following formula:
     /// `fwd_fee = (lump_price + ceil((bit_price * msg.bits + cell_price * msg.cells)/2^16))`.
     /// `msg.bits` and `msg.cells` are calculated from message represented as tree of cells. Root cell is not counted.
-    fn fwd_fee(&self, msg_cell: &Cell) -> Grams {
+    fn fwd_fee_checked(&self, msg_cell: &Cell) -> Result<Grams> {
         let mut storage = StorageUsedShort::default();
         storage.append(msg_cell);
         let mut bits = storage.bits() as u128;
@@ -76,13 +84,13 @@ impl CalcMsgFwdFees for MsgForwardPrices {
         // number (0xffff) and fee calculation uses such values. At the end result is divided by
         // 0xffff with ceil rounding to obtain nanograms (add 0xffff and then `>> 16`)
         let fwd_fee = self.lump_price as u128 + ((cells * self.cell_price as u128 + bits * self.bit_price as u128 + 0xffff) >> 16);
-        fwd_fee.into()
+        Grams::new(fwd_fee)
     }
 
     /// Calculate message IHR fee
     /// IHR fee is calculated as `(msg_forward_fee * ihr_factor) >> 16`
-    fn ihr_fee(&self, fwd_fee: &Grams) -> Grams {
-        Grams::from((fwd_fee.0 * self.ihr_price_factor as u128) >> 16)
+    fn ihr_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams> {
+        Grams::new((fwd_fee.as_u128() * self.ihr_price_factor as u128) >> 16)
     }
 
     /// Calculate mine part of forward fee
@@ -91,11 +99,11 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// `int_msg_mine_fee` is a part of transaction `total_fees` and will go validators of account's shard
     /// `int_msg_remain_fee` is placed in header of internal message and will go to validators
     /// of shard to which message destination address is belong.
-    fn mine_fee(&self, fwd_fee: &Grams) -> Grams {
-        Grams::from((fwd_fee.0 * self.first_frac as u128) >> 16)
+    fn mine_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams> {
+        Grams::new((fwd_fee.as_u128() * self.first_frac as u128) >> 16)
     }
-    fn next_fee(&self, fwd_fee: &Grams) -> Grams {
-        Grams::from((fwd_fee.0 * self.next_frac as u128) >> 16)
+    fn next_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams> {
+        Grams::new((fwd_fee.as_u128() * self.next_frac as u128) >> 16)
     }
 }
 
