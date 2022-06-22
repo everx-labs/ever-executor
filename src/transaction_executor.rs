@@ -40,7 +40,7 @@ use ton_block::{
 use ton_types::{
     error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256,
 };
-use ton_vm::executor::{Engine, EngineTraceInfo};
+use ton_vm::executor::{Engine, EngineTraceInfo, BehaviorModifiers};
 use ton_vm::{
     error::tvm_exception,
     executor::{gas::gas_state::Gas, IndexProvider},
@@ -85,6 +85,7 @@ pub struct ExecuteParams {
     pub debug: bool,
     pub trace_callback: Option<Arc<dyn Fn(&Engine, &EngineTraceInfo) + Send + Sync>>,
     pub index_provider: Option<Arc<dyn IndexProvider>>,
+    pub behavior_modifiers: Option<BehaviorModifiers>,
 }
 
 pub struct ActionPhaseResult {
@@ -106,7 +107,7 @@ impl ActionPhaseResult {
 impl Default for ExecuteParams {
     fn default() -> Self {
         Self {
-            state_libs: HashmapE::default(),
+            state_libs: HashmapE::with_bit_len(32),
             block_unixtime: 0,
             block_lt: 0,
             seq_no: 0,
@@ -115,6 +116,7 @@ impl Default for ExecuteParams {
             debug: false,
             trace_callback: None,
             index_provider: None,
+            behavior_modifiers: None,
         }
     }
 }
@@ -313,14 +315,12 @@ pub trait TransactionExecutor {
         acc: &mut Account,
         acc_balance: &mut CurrencyCollection,
         msg_balance: &CurrencyCollection,
-        state_libs: HashmapE, // masterchain libraries
         mut smc_info: SmartContractInfo,
         stack: Stack,
         storage_fee: u128,
         is_masterchain: bool,
         is_special: bool,
-        debug: bool,
-        trace_callback: Option<Arc<dyn Fn(&Engine, &EngineTraceInfo) + Send + Sync>>,
+        params: &ExecuteParams,
     ) -> Result<(TrComputePhase, Option<Cell>, Option<Cell>)> {
         let mut result_acc = acc.clone();
         let mut vm_phase = TrComputePhaseVm::default();
@@ -399,7 +399,7 @@ pub trait TransactionExecutor {
         let code = result_acc.get_code().unwrap_or_default();
         let data = result_acc.get_data().unwrap_or_default();
         libs.push(result_acc.libraries().inner());
-        libs.push(state_libs);
+        libs.push(params.state_libs.clone());
 
         smc_info.set_mycode(code.clone());
         smc_info.set_storage_fee(storage_fee);
@@ -412,12 +412,16 @@ pub trait TransactionExecutor {
             .set_data(data)?
             .set_libraries(libs)
             .set_gas(gas)
-            .set_debug(debug)
+            .set_debug(params.debug)
             .create();
+        
+        if let Some(modifiers) = params.behavior_modifiers.clone() {
+            vm.modify_behavior(modifiers);
+        }
 
         //TODO: set vm_init_state_hash
 
-        if let Some(trace_callback) = trace_callback  {
+        if let Some(trace_callback) = params.trace_callback.clone() {
             vm.set_trace_callback(move |engine, info| trace_callback(engine, info));
         }
 
@@ -1383,10 +1387,9 @@ fn reserve_action_handler(
 }
 
 fn setcode_action_handler(acc: &mut Account, code: Cell) -> Option<i32> {
-    log::debug!(target: "executor", "OutAction::SetCode {}\nPrevious code hash: {}\nNew code hash:      {}",
-        code,
-        acc.get_code().unwrap_or_default().repr_hash().to_hex_string(),
-        code.repr_hash().to_hex_string(),
+    log::debug!(target: "executor", "OutAction::SetCode\nPrevious code hash: {:x}\nNew code hash:      {:x}",
+        acc.get_code().unwrap_or_default().repr_hash(),
+        code.repr_hash(),
     );
     match acc.set_code(code) {
         true => None,
