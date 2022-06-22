@@ -133,26 +133,21 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             account,
             &mut acc_balance,
             &CurrencyCollection::default(),
-            params.state_libs,
             smc_info,
             stack,
             storage_fee,
             is_masterchain,
             is_special,
-            params.debug,
-            params.trace_callback,
+            &params,
         ) {
             Ok((compute_ph, actions, new_data)) => (compute_ph, actions, new_data),
-            Err(e) =>
-                if let Some(e) = e.downcast_ref::<ExecutorError>() {
-                    match e {
-                        ExecutorError::NoAcceptError(num, stack) => 
-                            fail!(ExecutorError::NoAcceptError(*num, stack.clone())),
-                        _ => fail!("Unknown error")
-                    }
-                } else {
-                    fail!(ExecutorError::TrExecutorError(e.to_string()))
+            Err(e) => {
+                log::debug!(target: "executor", "compute_phase error: {}", e);
+                match e.downcast_ref::<ExecutorError>() {
+                    Some(ExecutorError::NoAcceptError(_, _)) => return Err(e),
+                    _ => fail!(ExecutorError::TrExecutorError(e.to_string()))
                 }
+            }
         };
         let mut out_msgs = vec![];
         description.compute_ph = compute_ph;

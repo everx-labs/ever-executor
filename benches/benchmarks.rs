@@ -16,7 +16,7 @@ use failure::{err_msg, bail};
 use serde::{Serialize, Deserialize};
 use ton_block::{Deserializable, Account, Transaction, ConfigParams, Serializable, TransactionDescr};
 use ton_executor::{BlockchainConfig, ExecuteParams, OrdinaryTransactionExecutor, TickTockTransactionExecutor, TransactionExecutor};
-use ton_types::{Result, UInt256, HashmapE, Cell, Status};
+use ton_types::{Result, UInt256, Cell, Status};
 use std::sync::{Arc, atomic::AtomicU64};
 
 use std::sync::atomic::Ordering;
@@ -341,13 +341,10 @@ fn replay_block(data: BlockData) -> Status {
                 tr.read_in_msg()?.as_ref(),
                 &mut account,
                 ExecuteParams {
-                    state_libs: HashmapE::default(),
                     block_unixtime: tr.now(),
                     block_lt: tr.logical_time(),
                     last_tr_lt: Arc::new(AtomicU64::new(tr.logical_time())),
-                    seed_block: UInt256::default(),
-                    debug: false,
-                    trace_callback: None,
+                    ..Default::default()
                 }
             )?;
             if account.repr_hash() != tr.read_state_update()?.new_hash {
