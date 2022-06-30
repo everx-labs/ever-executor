@@ -598,7 +598,6 @@ pub trait TransactionExecutor {
             .ok_or_else(|| error!("Not found account address"))?.clone();
         let workchains = match self.config().raw_config().workchains() {
             Ok(workchains) => workchains,
-            #[cfg(not(test))]
             Err(e) => {
                 log::error!(target: "executor", "get workchains error {}", e);
                 fail!("get workchains error {}", e)
