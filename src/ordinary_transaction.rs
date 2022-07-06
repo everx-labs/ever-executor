@@ -336,14 +336,13 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if description.aborted && !is_ext_msg && bounce {
             if !action_phase_processed {
                 log::debug!(target: "executor", "bounce_phase");
-                let my_addr = account.get_addr().unwrap_or(account_address);
                 description.bounce = match self.bounce_phase(
                     msg_balance.clone(),
                     &mut acc_balance, 
                     &compute_phase_gas_fees, 
                     in_msg, 
                     &mut tr,
-                    my_addr
+                    params.block_version,
                 ) {
                     Ok((bounce_ph, Some(bounce_msg))) => {
                         out_msgs.push(bounce_msg);

@@ -2,10 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-## Version: 1.15.74
+## Version: 1.15.77
 
 ### New
 
+
+## Version: 1.15.75
+
+### New
+
+- backward compatibility to prev nodes in bounced fee calculating
 
 ## Version: 1.5.73
 

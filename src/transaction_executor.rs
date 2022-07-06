@@ -12,11 +12,7 @@
 */
 #![allow(clippy::too_many_arguments)]
 
-use crate::{
-    blockchain_config::{BlockchainConfig, CalcMsgFwdFees},
-    error::ExecutorError,
-    vmsetup::VMSetup,
-};
+use crate::{blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError, VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE, vmsetup::VMSetup};
 use std::collections::LinkedList;
 
 use std::{
@@ -86,6 +82,7 @@ pub struct ExecuteParams {
     pub trace_callback: Option<Arc<dyn Fn(&Engine, &EngineTraceInfo) + Send + Sync>>,
     pub index_provider: Option<Arc<dyn IndexProvider>>,
     pub behavior_modifiers: Option<BehaviorModifiers>,
+    pub block_version: u32,
 }
 
 pub struct ActionPhaseResult {
@@ -117,6 +114,7 @@ impl Default for ExecuteParams {
             trace_callback: None,
             index_provider: None,
             behavior_modifiers: None,
+            block_version: 0,
         }
     }
 }
@@ -548,6 +546,7 @@ pub trait TransactionExecutor {
         let mut acc_remaining_balance = acc_balance.clone();
         let mut phase = TrActionPhase::default();
         let mut total_reserved_value = CurrencyCollection::default();
+        phase.action_list_hash = actions_cell.repr_hash();
         let mut actions = match OutActions::construct_from_cell(actions_cell) {
             Err(err) => {
                 log::debug!(
@@ -568,7 +567,6 @@ pub trait TransactionExecutor {
             phase.result_code = RESULT_CODE_TOO_MANY_ACTIONS;
             return Ok(ActionPhaseResult::from_phase(phase))
         }
-        phase.action_list_hash = actions.hash()?;
         phase.tot_actions = actions.len() as i16;
 
         let process_err_code = |mut err_code: i32, i: usize, phase: &mut TrActionPhase| -> Result<bool> {
@@ -801,7 +799,7 @@ pub trait TransactionExecutor {
         compute_phase_fees: &Grams,
         msg: &Message,
         tr: &mut Transaction,
-        _: &MsgAddressInt,
+        block_version: u32,
     ) -> Result<(TrBouncePhase, Option<Message>)> {
         let header = msg.int_header()
             .ok_or_else(|| error!("Not found msg internal header"))?;
@@ -821,6 +819,8 @@ pub trait TransactionExecutor {
                 fail!("Incorrect destination address in a bounced message {}", header.dst)
             }
         }
+
+        let fwd_prices = self.config().get_fwd_prices(msg.is_masterchain());
 
         // create header for new bounced message and swap src and dst addresses
         header.ihr_disabled = true;
@@ -849,13 +849,17 @@ pub trait TransactionExecutor {
 
         // calculated storage for bounced message is empty
         let serialized_message = bounce_msg.serialize()?;
-        let mut storage = StorageUsedShort::default();
-        storage.append(&serialized_message);
-        let storage_bits = storage.bits() - serialized_message.bit_length() as u64;
-        let storage_cells = storage.cells() - 1;
-        let storage = StorageUsedShort::with_values_checked(storage_cells, storage_bits)?;
-        let fwd_prices = self.config().get_fwd_prices(msg.is_masterchain());
-        let fwd_full_fees = fwd_prices.fwd_fee_checked(&serialized_message)?;
+        let (storage, fwd_full_fees) = if block_version >= VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE {
+            let mut storage = StorageUsedShort::default();
+            storage.append(&serialized_message);
+            let storage_bits = storage.bits() - serialized_message.bit_length() as u64;
+            let storage_cells = storage.cells() - 1;
+            let fwd_full_fees = fwd_prices.fwd_fee_checked(&serialized_message)?;
+            (StorageUsedShort::with_values_checked(storage_cells, storage_bits)?, fwd_full_fees)
+        } else {
+            let fwd_full_fees = fwd_prices.fwd_fee_checked(&Cell::default())?;
+            (StorageUsedShort::with_values_checked(0, 0)?, fwd_full_fees)
+        };
         let fwd_mine_fees = fwd_prices.mine_fee_checked(&fwd_full_fees)?;
         let fwd_fees = fwd_full_fees - fwd_mine_fees;
 
