@@ -2,7 +2,7 @@
 build = 'build.rs'
 edition = '2018'
 name = 'ton_executor'
-version = '1.15.90'
+version = '1.15.91'
 
 [dependencies]
 failure = '0.1.6'
@@ -10,4 +10,4 @@ lazy_static = '1.4.0'
 log = '0.4'
 ton_block = { git = 'https://github.com/tonlabs/ton-labs-block.git', tag = '1.8.3' }
 ton_types = { git = 'https://github.com/tonlabs/ton-labs-types.git', tag = '1.11.4' }
-ton_vm = { git = 'https://github.com/tonlabs/ton-labs-vm.git', tag = '1.8.44' }
+ton_vm = { git = 'https://github.com/tonlabs/ton-labs-vm.git', tag = '1.8.45' }
