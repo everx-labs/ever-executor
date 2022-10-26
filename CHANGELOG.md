@@ -2,9 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## Version: 1.15.91
+## Version: 1.15.92
 
 ### New
+ - Updating the project due to dependency changes. #none
 
 
 ## Version: 1.15.75
