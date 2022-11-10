@@ -2,7 +2,7 @@
 build = 'build.rs'
 edition = '2018'
 name = 'ton_executor'
-version = '1.15.107'
+version = '1.15.108'
 
 [dependencies]
 failure = '0.1.6'
