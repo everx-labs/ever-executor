@@ -279,6 +279,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                         &compute_phase_gas_fees,
                         actions.unwrap_or_default(),
                         new_data,
+                        &account_address,
                         is_special
                     ) {
                         Ok(ActionPhaseResult{phase, messages, copyleft_reward}) => {
@@ -342,6 +343,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     &compute_phase_gas_fees, 
                     in_msg, 
                     &mut tr,
+                    &account_address,
                     params.block_version,
                 ) {
                     Ok((bounce_ph, Some(bounce_msg))) => {

@@ -12,21 +12,26 @@
 */
 #![allow(clippy::too_many_arguments)]
 
-use crate::{blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError, VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE, vmsetup::VMSetup};
+use crate::{
+    blockchain_config::{BlockchainConfig, CalcMsgFwdFees},
+    error::ExecutorError,
+    vmsetup::VMSetup,
+    VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE,
+};
 use std::collections::LinkedList;
 
 use std::{
+    convert::TryInto,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    convert::TryInto
 };
-use ton_block::{
+use ton_block::{ 
     AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, ComputeSkipReason,
     CopyleftReward, CurrencyCollection, Deserializable, ExtraCurrencyCollection, GasLimitsPrices,
     GetRepresentationHash, GlobalCapabilities, Grams, HashUpdate, Message, MsgAddressInt,
-    OutAction, OutActions, Serializable, StorageUsedShort, TrActionPhase, TrBouncePhase,
+    OutAction, OutActions, Serializable, StateInit, StorageUsedShort, TrActionPhase, TrBouncePhase,
     TrComputePhase, TrComputePhaseVm, TrCreditPhase, TrStoragePhase, Transaction, WorkchainFormat,
     BASE_WORKCHAIN_ID, MASTERCHAIN_ID, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG,
     RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
@@ -36,7 +41,7 @@ use ton_block::{
 use ton_types::{
     error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256,
 };
-use ton_vm::executor::{Engine, EngineTraceInfo, BehaviorModifiers};
+use ton_vm::executor::{BehaviorModifiers, Engine, EngineTraceInfo};
 use ton_vm::{
     error::tvm_exception,
     executor::{gas::gas_state::Gas, IndexProvider},
@@ -323,11 +328,12 @@ pub trait TransactionExecutor {
         let mut result_acc = acc.clone();
         let mut vm_phase = TrComputePhaseVm::default();
         let init_code_hash = self.config().has_capability(GlobalCapabilities::CapInitCodeHash);
+        let libs_disabled = !self.config().has_capability(GlobalCapabilities::CapSetLibCode);
         let is_external = if let Some(msg) = msg {
             if let Some(header) = msg.int_header() {
                 log::debug!(target: "executor", "msg internal, bounce: {}", header.bounce);
                 if result_acc.is_none() {
-                    if let Some(new_acc) = account_from_message(msg, msg_balance, true, init_code_hash) {
+                    if let Some(new_acc) = account_from_message(msg, msg_balance, true, init_code_hash, libs_disabled) {
                         result_acc = new_acc;
                         result_acc.set_last_paid(if !is_special {smc_info.unix_time()} else {0});
 
@@ -364,7 +370,7 @@ pub trait TransactionExecutor {
             if let Some(state_init) = msg.state_init() {
                 libs.push(state_init.libraries().inner());
             }
-            if let Some(reason) = compute_new_state(&mut result_acc, acc_balance, msg, init_code_hash) {
+            if let Some(reason) = compute_new_state(&mut result_acc, acc_balance, msg, init_code_hash, libs_disabled) {
                 if !init_code_hash {
                     *acc = result_acc;
                 }
@@ -521,11 +527,12 @@ pub trait TransactionExecutor {
         compute_phase_fees: &Grams,
         actions_cell: Cell,
         new_data: Option<Cell>,
+        my_addr: &MsgAddressInt,
         is_special: bool,
     ) -> Result<(TrActionPhase, Vec<Message>)> {
         let result = self.action_phase_with_copyleft(
             tr, acc, original_acc_balance, acc_balance, msg_remaining_balance,
-            compute_phase_fees, actions_cell, new_data, is_special)?;
+            compute_phase_fees, actions_cell, new_data, my_addr, is_special)?;
         Ok((result.phase, result.messages))
     }
 
@@ -539,6 +546,7 @@ pub trait TransactionExecutor {
         compute_phase_fees: &Grams,
         actions_cell: Cell,
         new_data: Option<Cell>,
+        my_addr: &MsgAddressInt,
         is_special: bool,
     ) -> Result<ActionPhaseResult> {
         let mut out_msgs = vec![];
@@ -592,16 +600,6 @@ pub trait TransactionExecutor {
         let mut account_deleted = false;
 
         let mut out_msgs0 = vec![];
-        let my_addr = acc_copy.get_addr()
-            .ok_or_else(|| error!("Not found account address"))?.clone();
-        let workchains = match self.config().raw_config().workchains() {
-            Ok(workchains) => workchains,
-            Err(e) => {
-                log::error!(target: "executor", "get workchains error {}", e);
-                fail!("get workchains error {}", e)
-            }
-        };
-
         let copyleft_reward = self.copyleft_action_handler(compute_phase_fees, &mut phase, &actions)?;
         if phase.result_code != 0 {
             return Ok(ActionPhaseResult::from_phase(phase));
@@ -616,42 +614,6 @@ pub trait TransactionExecutor {
             let mut init_balance = acc_remaining_balance.clone();
             let err_code = match std::mem::replace(action, OutAction::None) {
                 OutAction::SendMsg{ mode, mut out_msg } => {
-                    if let Some(header) = out_msg.int_header() {
-                        // let src_workchain_id = my_addr.workchain_id();
-                        match header.dst.workchain_id() {
-                            // allow to send only to -1 from 0 or -1
-                            MASTERCHAIN_ID => {
-                                if my_addr.workchain_id() != MASTERCHAIN_ID && my_addr.workchain_id() != BASE_WORKCHAIN_ID {
-                                    log::error!(target: "executor", "masterchain cannot accept from {} workchain", my_addr.workchain_id());
-                                    fail!("masterchain cannot accept from {} workchain", my_addr.workchain_id())
-                                }
-                            }
-                            // allow to send to self or from master to any which is possible
-                            workchain_id => {
-                                if my_addr.workchain_id() == workchain_id || my_addr.workchain_id() == MASTERCHAIN_ID {
-                                    match workchains.get(&workchain_id) {
-                                        Ok(None) => {
-                                            log::error!(target: "executor", "workchain {} is not deployed", workchain_id);
-                                            fail!("workchain {} is not deployed", workchain_id)
-                                        }
-                                        Err(e) => {
-                                            log::error!(target: "executor", "workchain {} cannot be get {}", workchain_id, e);
-                                            fail!("workchain {} cannot be get {}", workchain_id, e)
-                                        }
-                                        Ok(Some(descr)) => {
-                                            if !descr.accept_msgs {
-                                                log::error!(target: "executor", "cannot send message from {} to {} it doesn't accept", header.src, header.dst);
-                                                fail!("cannot send message from {} to {} it doesn't accept", header.src, header.dst)
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    log::error!(target: "executor", "cannot send message from {} to {} it doesn't allow yet", header.src, header.dst);
-                                    fail!("cannot send message from {} to {} it doesn't allow yet", header.src, header.dst)
-                                }
-                            }
-                        }
-                    }
                     if (mode & SENDMSG_ALL_BALANCE) != 0 {
                         out_msgs0.push((i, mode, out_msg));
                         log::debug!(target: "executor", "Message with flag `SEND_ALL_BALANCE` it will be sent last. Skip it for now.");
@@ -799,6 +761,7 @@ pub trait TransactionExecutor {
         compute_phase_fees: &Grams,
         msg: &Message,
         tr: &mut Transaction,
+        my_addr: &MsgAddressInt,
         block_version: u32,
     ) -> Result<(TrBouncePhase, Option<Message>)> {
         let header = msg.int_header()
@@ -812,7 +775,7 @@ pub trait TransactionExecutor {
             .ok_or_else(|| error!("Not found src in message header"))?.clone();
         let msg_dst = std::mem::replace(&mut header.dst, msg_src);
         header.set_src(msg_dst);
-        match check_rewrite_dest_addr(&header.dst, self.config()) {
+        match check_rewrite_dest_addr(&header.dst, self.config(), &my_addr) {
             Ok(new_dst) => {header.dst = new_dst}
             Err(_) => {
                 log::warn!(target: "executor", "Incorrect destination address in a bounced message {}", header.dst);
@@ -964,7 +927,13 @@ pub trait TransactionExecutor {
 /// If account is uninitialized - it can be created with active state.
 /// If account exists - it can be frozen.
 /// Returns computed initial phase.
-fn compute_new_state(acc: &mut Account, acc_balance: &CurrencyCollection, in_msg: &Message, init_code_hash: bool) -> Option<ComputeSkipReason> {
+fn compute_new_state(
+    acc: &mut Account,
+    acc_balance: &CurrencyCollection,
+    in_msg: &Message,
+    init_code_hash: bool,
+    disable_set_lib: bool,
+) -> Option<ComputeSkipReason> {
     log::debug!(target: "executor", "compute_account_state");
     match acc.status() {
         AccountStatus::AccStateNonexist => {
@@ -983,6 +952,10 @@ fn compute_new_state(acc: &mut Account, acc_balance: &CurrencyCollection, in_msg
                 // if msg is a constructor message then
                 // borrow code and data from it and switch account state to 'active'.
                 log::debug!(target: "executor", "message for uninitialized: activated");
+                let text = "Cannot construct account from message with hash";
+                if !check_libraries(&state_init, disable_set_lib, text, &in_msg) {
+                    return Some(ComputeSkipReason::BadState);
+                }
                 match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                     Err(err) => {
                         log::debug!(target: "executor", "reason: {}", err);
@@ -1001,6 +974,10 @@ fn compute_new_state(acc: &mut Account, acc_balance: &CurrencyCollection, in_msg
             //and inbound message bear code and data then make some check and unfreeze account
             if !acc_balance.grams.is_zero() { // This check is redundant
                 if let Some(state_init) = in_msg.state_init() {
+                    let text = "Cannot unfreeze account from message with hash";
+                    if !check_libraries(&state_init, disable_set_lib, text, &in_msg) {
+                        return Some(ComputeSkipReason::BadState);
+                    }
                     log::debug!(target: "executor", "message for frozen: activated");
                     return match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                         Err(err) => {
@@ -1040,11 +1017,15 @@ fn is_valid_addr_len(addr_len: u16, min_addr_len: u16, max_addr_len: u16, addr_l
     ((addr_len_step != 0) && ((addr_len - min_addr_len) % addr_len_step == 0)))
 }
 
-fn check_rewrite_dest_addr(dst: &MsgAddressInt, config: &BlockchainConfig) -> std::result::Result<MsgAddressInt, IncorrectCheckRewrite> {
+fn check_rewrite_dest_addr(
+    dst: &MsgAddressInt, 
+    config: &BlockchainConfig, 
+    my_addr: &MsgAddressInt
+) -> std::result::Result<MsgAddressInt, IncorrectCheckRewrite> {
     let (anycast_opt, addr_len, workchain_id, address, repack);
     match dst {
         MsgAddressInt::AddrVar(dst) => {
-            repack = dst.addr_len.as_u32() == 256 && dst.workchain_id >= -128 && dst.workchain_id < 128;
+            repack = (dst.addr_len.as_u32() == 256) && (dst.workchain_id >= -128) && (dst.workchain_id < 128);
             anycast_opt = dst.anycast.clone();
             addr_len = dst.addr_len.as_u16();
             workchain_id = dst.workchain_id;
@@ -1061,10 +1042,22 @@ fn check_rewrite_dest_addr(dst: &MsgAddressInt, config: &BlockchainConfig) -> st
 
     let is_masterchain = workchain_id == MASTERCHAIN_ID;
     if !is_masterchain {
+        if !(my_addr.workchain_id() == workchain_id || my_addr.workchain_id() == MASTERCHAIN_ID) {
+            log::debug!(
+                target: "executor", 
+                "cannot send message from {} to {} it doesn't allow yet", 
+                my_addr, dst
+            );
+            return Err(IncorrectCheckRewrite::Other);
+        }
         let workchains = config.raw_config().workchains().unwrap_or_default();
         if let Ok(Some(wc)) = workchains.get(&workchain_id) {
             if !wc.accept_msgs {
-                log::debug!(target: "executor", "destination address belongs to workchain {} not accepting new messages", workchain_id);
+                log::debug!(
+                    target: "executor", 
+                    "destination address belongs to workchain {} not accepting new messages", 
+                    workchain_id
+                );
                 return Err(IncorrectCheckRewrite::Other);
             }
             let (min_addr_len, max_addr_len, addr_len_step) = match wc.format {
@@ -1072,11 +1065,36 @@ fn check_rewrite_dest_addr(dst: &MsgAddressInt, config: &BlockchainConfig) -> st
                 WorkchainFormat::Basic(_) => (256, 256, 0)
             };
             if !is_valid_addr_len(addr_len, min_addr_len, max_addr_len, addr_len_step) {
-                log::debug!(target: "executor", "destination address has length {} invalid for destination workchain {}", addr_len, workchain_id);
+                log::debug!(
+                    target: "executor", 
+                    "destination address has length {} invalid for destination workchain {}", 
+                    addr_len, workchain_id
+                );
                 return Err(IncorrectCheckRewrite::Other);
             }
         } else {
-            log::debug!(target: "executor", "destination address contains unknown workchain_id {}", workchain_id);
+            log::debug!(
+                target: "executor", 
+                "destination address contains unknown workchain_id {}", 
+                workchain_id
+            );
+            return Err(IncorrectCheckRewrite::Other);
+        }
+    } else {
+        if my_addr.workchain_id() != MASTERCHAIN_ID && my_addr.workchain_id() != BASE_WORKCHAIN_ID {
+            log::debug!(
+                target: "executor", 
+                "masterchain cannot accept from {} workchain", 
+                my_addr.workchain_id()
+            );
+            return Err(IncorrectCheckRewrite::Other);
+        }
+        if addr_len != 256 {
+            log::debug!(
+                target: "executor", 
+                "destination address has length {} invalid for destination workchain {}", 
+                addr_len, workchain_id
+            );
             return Err(IncorrectCheckRewrite::Other);
         }
     }
@@ -1178,7 +1196,7 @@ fn outmsg_action_handler(
     };
 
     if let Some(int_header) = msg.int_header_mut() {
-        match check_rewrite_dest_addr(&int_header.dst, config) {
+        match check_rewrite_dest_addr(&int_header.dst, config, &my_addr) {
             Ok(new_dst) => {int_header.dst = new_dst}
             Err(type_error) => {
                 if type_error == IncorrectCheckRewrite::Anycast {
@@ -1449,6 +1467,31 @@ fn init_gas(acc_balance: u128, msg_balance: u128, is_external: bool, is_special:
     Gas::new(gas_limit as i64, gas_credit as i64, gas_max as i64, gas_info.get_real_gas_price() as i64)
 }
 
+fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Message) -> bool {
+    match init.libraries().len() {
+        Ok(len) => {
+            if !disable_set_lib || len == 0 {
+                return true
+            } else {
+                log::trace!(
+                    target: "executor",
+                    "{} {:x} because libraries are disabled",
+                        text, msg.hash().unwrap_or_default()
+                );
+                return false;
+            }
+        }
+        Err(err) => {
+            log::trace!(
+                target: "executor",
+                "{} {:x} because libraries are broken {}",
+                    text, msg.hash().unwrap_or_default(), err
+            );
+            return false;
+        }
+    }
+}
+
 /// Calculate new account according to inbound message.
 /// If message has no value, account will not created.
 /// If hash of state_init is equal to account address (or flag check address is false), account will be active.
@@ -1457,24 +1500,29 @@ fn account_from_message(
     msg: &Message, 
     msg_remaining_balance: &CurrencyCollection, 
     check_address: bool, 
-    init_code_hash: bool
+    init_code_hash: bool,
+    disable_set_lib: bool,
 ) -> Option<Account> {
     let hdr = msg.int_header()?;
     if let Some(init) = msg.state_init() {
         if init.code().is_some() {
             if !check_address || (init.hash().ok()? == hdr.dst.address()) {
-                return Account::active_by_init_code_hash(
-                    hdr.dst.clone(), 
-                    msg_remaining_balance.clone(), 
-                    0, 
-                    init.clone(), 
-                    init_code_hash
-                ).ok();
+                let text = "Cannot construct account from message with hash";
+                if check_libraries(&init, disable_set_lib, text, &msg) {
+                    return Account::active_by_init_code_hash(
+                        hdr.dst.clone(),
+                        msg_remaining_balance.clone(),
+                        0,
+                        init.clone(),
+                        init_code_hash
+                    ).ok();
+                }
             } else if check_address {
                 log::trace!(
                     target: "executor",
-                    "Cannot construct account from message with hash {:x} because the destination address does not math with hash message code",
-                    msg.hash().unwrap_or_default()
+                    "Cannot construct account from message with hash {:x} \
+                        because the destination address does not math with hash message code",
+                        msg.hash().unwrap_or_default()
                 );
             }
         }
