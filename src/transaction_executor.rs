@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2021 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -39,7 +39,7 @@ use ton_block::{
     SENDMSG_VALID_FLAGS,
 };
 use ton_types::{
-    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256,
+    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256, SliceData,
 };
 use ton_vm::executor::{BehaviorModifiers, Engine, EngineTraceInfo};
 use ton_vm::{
@@ -170,7 +170,7 @@ pub trait TransactionExecutor {
         let config_params = self.config().raw_config().config_params.data().cloned();
         let mut smci = SmartContractInfo {
             capabilities: self.config().raw_config().capabilities(),
-            myself: acc_address.serialize().unwrap_or_default().into(),
+            myself: SliceData::load_builder(acc_address.write_to_new_cell().unwrap_or_default()).unwrap(),
             block_lt,
             trans_lt,
             unix_time,
@@ -410,7 +410,7 @@ pub trait TransactionExecutor {
         if let Some(init_code_hash) = result_acc.init_code_hash() {
             smc_info.set_init_code_hash(init_code_hash.clone());
         }
-        let mut vm = VMSetup::with_capabilites(code.into(), self.config().capabilites())
+        let mut vm = VMSetup::with_capabilites(SliceData::load_cell(code)?, self.config().capabilites())
             .set_smart_contract_info(smc_info)?
             .set_stack(stack)
             .set_data(data)?
@@ -802,7 +802,7 @@ pub trait TransactionExecutor {
                     builder.append_reference_cell(body.into_cell());
                 }
             }
-            bounce_msg.set_body(builder.into_cell()?.into());
+            bounce_msg.set_body(SliceData::load_builder(builder)?);
             if self.config().has_capability(GlobalCapabilities::CapFullBodyInBounced) {
                 if let Some(init) = msg.state_init() {
                     bounce_msg.set_state_init(init.clone());
