@@ -17,14 +17,14 @@ use crate::{
 };
 #[cfg(feature = "timings")]
 use std::sync::atomic::AtomicU64;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::atomic::Ordering;
 #[cfg(feature = "timings")]
 use std::time::Instant;
 use ton_block::{
     AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message, Serializable,
     TrBouncePhase, TrComputePhase, Transaction, TransactionDescr, TransactionDescrOrdinary, MASTERCHAIN_ID
 };
-use ton_types::{error, fail, Result, HashmapType};
+use ton_types::{error, fail, Result, HashmapType, SliceData};
 use ton_vm::{
     boolean, int,
     stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
@@ -216,7 +216,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let config_params = self.config().raw_config().config_params.data().cloned();
         let mut smc_info = SmartContractInfo {
             capabilities: self.config().raw_config().capabilities(),
-            myself: account_address.serialize().unwrap_or_default().into(),
+            myself: SliceData::load_builder(account_address.write_to_new_cell().unwrap_or_default()).unwrap(),
             block_lt: params.block_lt,
             trans_lt: lt,
             unix_time: params.block_unixtime,
@@ -225,7 +225,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             config_params,
             ..Default::default()
         };
-        smc_info.calc_rand_seed(params.seed_block, &account_address.address().get_bytestring(0));
+        smc_info.calc_rand_seed(params.seed_block.clone(), &account_address.address().get_bytestring(0));
         let mut stack = Stack::new();
         stack
             .push(int!(acc_balance.grams.as_u128()))

@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2021 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -13,12 +13,12 @@
 
 use crate::{blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecutor, error::ExecutorError, ActionPhaseResult};
 
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::atomic::Ordering;
 use ton_block::{
     Account, CurrencyCollection, Grams, Message, TrComputePhase, Transaction, 
     TransactionDescr, TransactionDescrTickTock, TransactionTickTock, Serializable
 };
-use ton_types::{error, fail, Result, HashmapType};
+use ton_types::{error, fail, Result, HashmapType, SliceData};
 use ton_vm::{
     boolean, int,
     stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
@@ -111,7 +111,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let config_params = self.config().raw_config().config_params.data().cloned();
         let mut smc_info = SmartContractInfo {
             capabilities: self.config().raw_config().capabilities(),
-            myself: account_address.serialize().unwrap_or_default().into(),
+            myself: SliceData::load_builder(account_address.write_to_new_cell().unwrap_or_default()).unwrap(),
             block_lt: params.block_lt,
             trans_lt: lt,
             unix_time: params.block_unixtime,
@@ -120,7 +120,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             config_params,
             ..Default::default()
         };
-        smc_info.calc_rand_seed(params.seed_block, &account_address.address().get_bytestring(0));
+        smc_info.calc_rand_seed(params.seed_block.clone(), &account_address.address().get_bytestring(0));
         let mut stack = Stack::new();
         stack
             .push(int!(account.balance().map_or(0, |value| value.grams.as_u128())))
