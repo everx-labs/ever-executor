@@ -11,7 +11,6 @@
 * limitations under the License.
 */
 
-use std::str::FromStr;
 use ton_block::{
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, GasLimitsPrices, GlobalCapabilities, Grams,
     MsgAddressInt, MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
@@ -242,9 +241,9 @@ impl BlockchainConfig {
         let mut map = FundamentalSmcAddresses::default();
         map.add_key(&UInt256::with_array([0x33u8; 32])).unwrap();
         map.add_key(&UInt256::with_array([0x66u8; 32])).unwrap();
-        map.add_key(&UInt256::from_str(
-            "34517C7BDF5187C55AF4F8B61FDC321588C7AB768DEE24B006DF29106458D7CF"
-        ).unwrap()).unwrap();
+        map.add_key(&
+            "34517C7BDF5187C55AF4F8B61FDC321588C7AB768DEE24B006DF29106458D7CF".parse::<UInt256>().unwrap()
+        ).unwrap();
         map
     }
 
