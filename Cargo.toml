@@ -1,8 +1,8 @@
 [package]
-build = 'build.rs'
-edition = '2018'
+build = 'common/build/build.rs'
+edition = '2021'
 name = 'ton_executor'
-version = '1.15.136'
+version = '1.15.138'
 
 [dependencies]
 failure = '0.1.6'
