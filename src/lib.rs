@@ -31,3 +31,5 @@ pub use vmsetup::*;
 
 pub mod blockchain_config;
 pub use blockchain_config::*;
+
+include!("../common/src/info.rs");

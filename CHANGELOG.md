@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version: 1.15.128
+
+### New
+
+- add common submodule
+
+### Fixes
+
+- minor refactor for clippy
+
 ## Version: 1.15.121
 
 ### Fixes

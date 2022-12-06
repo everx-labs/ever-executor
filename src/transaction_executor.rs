@@ -41,7 +41,7 @@ use ton_block::{
 use ton_types::{
     error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256, SliceData,
 };
-use ton_vm::executor::{BehaviorModifiers, Engine, EngineTraceInfo};
+use ton_vm::executor::BehaviorModifiers;
 use ton_vm::{
     error::tvm_exception,
     executor::{gas::gas_state::Gas, IndexProvider},
@@ -67,7 +67,7 @@ const MAX_ACTIONS: usize = 255;
 const MAX_MSG_BITS: usize = 1 << 21;
 const MAX_MSG_CELLS: usize = 1 << 13;
 
-#[derive(PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug)]
 pub enum IncorrectCheckRewrite {
     Anycast,
     Other
@@ -84,7 +84,7 @@ pub struct ExecuteParams {
     pub last_tr_lt: Arc<AtomicU64>,
     pub seed_block: UInt256,
     pub debug: bool,
-    pub trace_callback: Option<Arc<dyn Fn(&Engine, &EngineTraceInfo) + Send + Sync>>,
+    pub trace_callback: Option<Arc<ton_vm::executor::TraceCallback>>,
     pub index_provider: Option<Arc<dyn IndexProvider>>,
     pub behavior_modifiers: Option<BehaviorModifiers>,
     pub block_version: u32,
@@ -628,7 +628,7 @@ pub trait TransactionExecutor {
                         compute_phase_fees,
                         self.config(),
                         is_special,
-                        &my_addr,
+                        my_addr,
                         &total_reserved_value,
                         &mut account_deleted
                     );
@@ -700,7 +700,7 @@ pub trait TransactionExecutor {
                 compute_phase_fees,
                 self.config(),
                 is_special,
-                &my_addr,
+                my_addr,
                 &total_reserved_value,
                 &mut account_deleted
             );
@@ -775,7 +775,7 @@ pub trait TransactionExecutor {
             .ok_or_else(|| error!("Not found src in message header"))?.clone();
         let msg_dst = std::mem::replace(&mut header.dst, msg_src);
         header.set_src(msg_dst);
-        match check_rewrite_dest_addr(&header.dst, self.config(), &my_addr) {
+        match check_rewrite_dest_addr(&header.dst, self.config(), my_addr) {
             Ok(new_dst) => {header.dst = new_dst}
             Err(_) => {
                 log::warn!(target: "executor", "Incorrect destination address in a bounced message {}", header.dst);
@@ -953,7 +953,7 @@ fn compute_new_state(
                 // borrow code and data from it and switch account state to 'active'.
                 log::debug!(target: "executor", "message for uninitialized: activated");
                 let text = "Cannot construct account from message with hash";
-                if !check_libraries(&state_init, disable_set_lib, text, &in_msg) {
+                if !check_libraries(state_init, disable_set_lib, text, in_msg) {
                     return Some(ComputeSkipReason::BadState);
                 }
                 match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
@@ -975,7 +975,7 @@ fn compute_new_state(
             if !acc_balance.grams.is_zero() { // This check is redundant
                 if let Some(state_init) = in_msg.state_init() {
                     let text = "Cannot unfreeze account from message with hash";
-                    if !check_libraries(&state_init, disable_set_lib, text, &in_msg) {
+                    if !check_libraries(state_init, disable_set_lib, text, in_msg) {
                         return Some(ComputeSkipReason::BadState);
                     }
                     log::debug!(target: "executor", "message for frozen: activated");
@@ -1132,7 +1132,7 @@ fn check_rewrite_dest_addr(
 
     if !repack {
         Ok(dst.clone())
-    } else if addr_len == 256 && workchain_id >= -128 && workchain_id < 128 {
+    } else if addr_len == 256 && (-128..128).contains(&workchain_id) {
         // repack as an addr_std
         MsgAddressInt::with_standart(anycast_opt, workchain_id as i8, address).map_err(|_| {
             IncorrectCheckRewrite::Other
@@ -1196,7 +1196,7 @@ fn outmsg_action_handler(
     };
 
     if let Some(int_header) = msg.int_header_mut() {
-        match check_rewrite_dest_addr(&int_header.dst, config, &my_addr) {
+        match check_rewrite_dest_addr(&int_header.dst, config, my_addr) {
             Ok(new_dst) => {int_header.dst = new_dst}
             Err(type_error) => {
                 if type_error == IncorrectCheckRewrite::Anycast {
@@ -1471,14 +1471,14 @@ fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Me
     match init.libraries().len() {
         Ok(len) => {
             if !disable_set_lib || len == 0 {
-                return true
+                true
             } else {
                 log::trace!(
                     target: "executor",
                     "{} {:x} because libraries are disabled",
                         text, msg.hash().unwrap_or_default()
                 );
-                return false;
+                false
             }
         }
         Err(err) => {
@@ -1487,7 +1487,7 @@ fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Me
                 "{} {:x} because libraries are broken {}",
                     text, msg.hash().unwrap_or_default(), err
             );
-            return false;
+            false
         }
     }
 }
@@ -1508,7 +1508,7 @@ fn account_from_message(
         if init.code().is_some() {
             if !check_address || (init.hash().ok()? == hdr.dst.address()) {
                 let text = "Cannot construct account from message with hash";
-                if check_libraries(&init, disable_set_lib, text, &msg) {
+                if check_libraries(init, disable_set_lib, text, msg) {
                     return Account::active_by_init_code_hash(
                         hdr.dst.clone(),
                         msg_remaining_balance.clone(),
