@@ -799,7 +799,7 @@ pub trait TransactionExecutor {
                 body_copy.shrink_data(0..256);
                 builder.append_bytestring(&body_copy)?;
                 if self.config().has_capability(GlobalCapabilities::CapFullBodyInBounced) {
-                    builder.append_reference_cell(body.into_cell());
+                    builder.checked_append_reference(body.into_cell())?;
                 }
             }
             bounce_msg.set_body(SliceData::load_builder(builder)?);
