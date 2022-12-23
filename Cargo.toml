@@ -2,13 +2,13 @@
 build = 'common/build/build.rs'
 edition = '2021'
 name = 'ton_executor'
-version = '1.15.150'
+version = '1.15.151'
 
 [dependencies]
 failure = '0.1.6'
 lazy_static = '1.4.0'
 log = '0.4'
-ton_block = { git = 'https://github.com/tonlabs/ton-labs-block.git', tag = '1.9.16' }
+ton_block = { git = 'https://github.com/tonlabs/ton-labs-block.git', tag = '1.9.17' }
 ton_types = { git = 'https://github.com/tonlabs/ton-labs-types.git', tag = '1.12.5' }
-ton_vm = { git = 'https://github.com/tonlabs/ton-labs-vm.git', tag = '1.8.93' }
+ton_vm = { git = 'https://github.com/tonlabs/ton-labs-vm.git', tag = '1.8.94' }
 
