@@ -46,7 +46,7 @@ use ton_vm::{
     error::tvm_exception,
     executor::{gas::gas_state::Gas, IndexProvider},
     smart_contract_info::SmartContractInfo,
-    stack::{Stack, StackItem},
+    stack::Stack,
 };
 
 const RESULT_CODE_ACTIONLIST_INVALID:            i32 = 32;
@@ -488,16 +488,16 @@ pub trait TransactionExecutor {
             fail!("can't sub funds: from acc_balance")
         }
 
-        let new_data = if let StackItem::Cell(cell) = vm.get_committed_state().get_root() {
-            Some(cell)
+        let new_data = if let Ok(cell) = vm.get_committed_state().get_root().as_cell() {
+            Some(cell.clone())
         } else {
             log::debug!(target: "executor", "invalid contract, it must be cell in c4 register");
             vm_phase.success = false;
             None
         };
 
-        let out_actions = if let StackItem::Cell(root_cell) = vm.get_committed_state().get_actions() {
-            Some(root_cell)
+        let out_actions = if let Ok(root_cell) = vm.get_committed_state().get_actions().as_cell() {
+            Some(root_cell.clone())
         } else {
             log::debug!(target: "executor", "invalid contract, it must be cell in c5 register");
             vm_phase.success = false;

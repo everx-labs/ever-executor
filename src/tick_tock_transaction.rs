@@ -124,7 +124,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut stack = Stack::new();
         stack
             .push(int!(account.balance().map_or(0, |value| value.grams.as_u128())))
-            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.get_bytestring(0))))
+            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(account_id.get_bytestring(0))))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
         log::debug!(target: "executor", "compute_phase {}", lt);
@@ -227,7 +227,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let mut stack = Stack::new();
         stack
             .push(int!(account_balance))
-            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.get_bytestring(0))))
+            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(account_id.get_bytestring(0))))
             .push(boolean!(self.tt.is_tock()))
             .push(int!(-2));
         stack
