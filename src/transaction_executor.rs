@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2023 TON Labs. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -410,7 +410,11 @@ pub trait TransactionExecutor {
         if let Some(init_code_hash) = result_acc.init_code_hash() {
             smc_info.set_init_code_hash(init_code_hash.clone());
         }
-        let mut vm = VMSetup::with_capabilites(SliceData::load_cell(code)?, self.config().capabilites())
+        let mut vm = VMSetup::with_capabilites(
+            SliceData::load_cell(code)?, 
+            self.config().capabilites(),
+            params.block_version
+        )
             .set_smart_contract_info(smc_info)?
             .set_stack(stack)
             .set_data(data)?

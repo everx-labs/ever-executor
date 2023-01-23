@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2023 TON Labs. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -27,14 +27,15 @@ pub struct VMSetup {
     ctrls: SaveList,
     stack: Option<Stack>,
     gas: Option<Gas>,
-    libraries: Vec<HashmapE>
+    libraries: Vec<HashmapE>,
+    block_version: u32, 
 }
 
 impl VMSetup {
 
     /// Creates new instance of VMSetup with contract code.
     /// Initializes some registers of TVM with predefined values.
-    pub fn with_capabilites(code: SliceData, capabilities: u64) -> Self {
+    pub fn with_capabilites(code: SliceData, capabilities: u64, block_version: u32) -> Self {
         VMSetup {
             vm: Engine::with_capabilities(capabilities),
             code,
@@ -42,6 +43,7 @@ impl VMSetup {
             stack: None,
             gas: Some(Gas::empty()),
             libraries: vec![],
+            block_version,
         }
     }
 
@@ -136,12 +138,14 @@ impl VMSetup {
                 .unwrap();
             assert_eq!(balance_in_smc, balance_in_stack);
         }
-        self.vm.setup_with_libraries(
+        let mut vm = self.vm.setup_with_libraries(
             self.code, 
             Some(self.ctrls), 
             self.stack, 
             self.gas, 
             self.libraries
-        )
+        );
+        vm.set_block_version(self.block_version);
+        vm
     }
 }
