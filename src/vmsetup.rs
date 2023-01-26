@@ -19,6 +19,13 @@ use ton_vm::{
 };
 use crate::BlockchainConfig;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct VMSetupContext {
+    pub capabilities: u64,
+    pub block_version: u32,
+    pub signature_id: i32,
+}
+
 /// Builder for virtual machine engine. Initialises registers,
 /// stack and code of VM engine. Returns initialized instance of TVM.
 pub struct VMSetup {
@@ -28,22 +35,22 @@ pub struct VMSetup {
     stack: Option<Stack>,
     gas: Option<Gas>,
     libraries: Vec<HashmapE>,
-    block_version: u32, 
+    ctx: VMSetupContext,
 }
 
 impl VMSetup {
 
     /// Creates new instance of VMSetup with contract code.
     /// Initializes some registers of TVM with predefined values.
-    pub fn with_capabilites(code: SliceData, capabilities: u64, block_version: u32) -> Self {
+    pub fn with_context(code: SliceData, context: VMSetupContext) -> Self {
         VMSetup {
-            vm: Engine::with_capabilities(capabilities),
+            vm: Engine::with_capabilities(context.capabilities),
             code,
             ctrls: SaveList::new(),
             stack: None,
             gas: Some(Gas::empty()),
             libraries: vec![],
-            block_version,
+            ctx: context,
         }
     }
 
@@ -139,13 +146,14 @@ impl VMSetup {
             assert_eq!(balance_in_smc, balance_in_stack);
         }
         let mut vm = self.vm.setup_with_libraries(
-            self.code, 
-            Some(self.ctrls), 
-            self.stack, 
-            self.gas, 
+            self.code,
+            Some(self.ctrls),
+            self.stack,
+            self.gas,
             self.libraries
         );
-        vm.set_block_version(self.block_version);
+        vm.set_block_version(self.ctx.block_version);
+        vm.set_signature_id(self.ctx.signature_id);
         vm
     }
 }

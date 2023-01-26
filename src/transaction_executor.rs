@@ -15,7 +15,7 @@
 use crate::{
     blockchain_config::{BlockchainConfig, CalcMsgFwdFees},
     error::ExecutorError,
-    vmsetup::VMSetup,
+    vmsetup::{VMSetup, VMSetupContext},
     VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE,
 };
 use std::collections::LinkedList;
@@ -88,6 +88,7 @@ pub struct ExecuteParams {
     pub index_provider: Option<Arc<dyn IndexProvider>>,
     pub behavior_modifiers: Option<BehaviorModifiers>,
     pub block_version: u32,
+    pub signature_id: i32,
 }
 
 pub struct ActionPhaseResult {
@@ -120,12 +121,13 @@ impl Default for ExecuteParams {
             index_provider: None,
             behavior_modifiers: None,
             block_version: 0,
+            signature_id: 0,
         }
     }
 }
 
 pub trait TransactionExecutor {
-    
+
     fn execute_with_params(
         &self,
         in_msg: Option<&Message>,
@@ -410,10 +412,13 @@ pub trait TransactionExecutor {
         if let Some(init_code_hash) = result_acc.init_code_hash() {
             smc_info.set_init_code_hash(init_code_hash.clone());
         }
-        let mut vm = VMSetup::with_capabilites(
-            SliceData::load_cell(code)?, 
-            self.config().capabilites(),
-            params.block_version
+        let mut vm = VMSetup::with_context(
+            SliceData::load_cell(code)?,
+            VMSetupContext {
+                capabilities: self.config().capabilites(),
+                block_version: params.block_version,
+                signature_id: params.signature_id,
+            }
         )
             .set_smart_contract_info(smc_info)?
             .set_stack(stack)
