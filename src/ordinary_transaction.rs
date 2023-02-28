@@ -21,14 +21,16 @@ use std::sync::atomic::Ordering;
 #[cfg(feature = "timings")]
 use std::time::Instant;
 use ton_block::{
-    AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message, Serializable,
-    TrBouncePhase, TrComputePhase, Transaction, TransactionDescr, TransactionDescrOrdinary, MASTERCHAIN_ID
+    AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message,
+    Serializable, TrBouncePhase, TrComputePhase, Transaction, TransactionDescr,
+    TransactionDescrOrdinary, MASTERCHAIN_ID, GlobalCapabilities
 };
 use ton_types::{error, fail, Result, HashmapType, SliceData};
 use ton_vm::{
     boolean, int,
     stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
 };
+
 
 
 
@@ -260,6 +262,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let mut compute_phase_gas_fees = Grams::zero();
         let mut copyleft = None;
         description.compute_ph = compute_ph;
+        let mut new_acc_balance = acc_balance.clone();
         description.action = match &description.compute_ph {
             TrComputePhase::Vm(phase) => {
                 compute_phase_gas_fees = phase.gas_fees;
@@ -268,13 +271,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     log::debug!(target: "executor", "compute_phase: success");
                     log::debug!(target: "executor", "action_phase: lt={}", lt);
                     action_phase_processed = true;
-                    // since the balance is not used anywhere else if we have reached this point, 
-                    // then we can change it here
                     match self.action_phase_with_copyleft(
                         &mut tr,
                         account,
                         &original_acc_balance,
-                        &mut acc_balance,
+                        &mut new_acc_balance,
                         &mut msg_balance,
                         &compute_phase_gas_fees,
                         actions.unwrap_or_default(),
@@ -325,6 +326,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     *account = Account::default();
                     description.destroyed = true;
                 }
+                if phase.success {
+                    acc_balance = new_acc_balance;
+                }
                 !phase.success
             }
             None => {
@@ -335,7 +339,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
         if description.aborted && !is_ext_msg && bounce {
-            if !action_phase_processed {
+            if !action_phase_processed || self.config().has_capability(GlobalCapabilities::CapBounceAfterFailedAction) {
                 log::debug!(target: "executor", "bounce_phase");
                 description.bounce = match self.bounce_phase(
                     msg_balance.clone(),
