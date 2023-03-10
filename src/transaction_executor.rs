@@ -18,7 +18,7 @@ use crate::{
     vmsetup::{VMSetup, VMSetupContext},
     VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE,
 };
-use std::collections::LinkedList;
+use std::{collections::LinkedList, cmp::min};
 
 use std::{
     convert::TryInto,
@@ -284,7 +284,7 @@ pub trait TransactionExecutor {
         acc_balance: &mut CurrencyCollection,
     ) -> Result<TrCreditPhase> {
         let collected = if let Some(due_payment) = acc.due_payment() {
-            let collected = *std::cmp::min(due_payment, &msg_balance.grams);
+            let collected = *min(due_payment, &msg_balance.grams);
             msg_balance.grams.sub(&collected)?;
             let mut due_payment_remaining = *due_payment;
             due_payment_remaining.sub(&collected)?;
@@ -1396,7 +1396,7 @@ fn reserve_action_handler(
     }
     if mode & RESERVE_IGNORE_ERROR != 0 {
         // Only grams
-        reserved.grams = std::cmp::min(reserved.grams, acc_remaining_balance.grams);
+        reserved.grams = min(reserved.grams, acc_remaining_balance.grams);
     }
 
     let mut remaining = acc_remaining_balance.clone();
@@ -1456,20 +1456,33 @@ fn change_library_action_handler(acc: &mut Account, mode: u8, code: Option<Cell>
     }
 }
 
-fn init_gas(acc_balance: u128, msg_balance: u128, is_external: bool, is_special: bool, is_ordinary: bool, gas_info: &GasLimitsPrices) -> Gas {
+fn init_gas(
+    acc_balance: u128,
+    msg_balance: u128,
+    is_external: bool,
+    is_special: bool,
+    is_ordinary: bool,
+    gas_info: &GasLimitsPrices
+) -> Gas {
     let gas_max = if is_special {
         gas_info.special_gas_limit
     } else {
-        std::cmp::min(gas_info.gas_limit, gas_info.calc_gas(acc_balance))
+        min(
+            (1 << (7 * 8)) - 1, // because gas_limit is stored as VarUInteger7
+            min(gas_info.gas_limit, gas_info.calc_gas(acc_balance))
+        )
     };
     let mut gas_credit = 0;
     let gas_limit = if !is_ordinary {
         gas_max
     } else {
         if is_external {
-            gas_credit = std::cmp::min(gas_info.gas_credit, gas_max);
+            gas_credit = min(
+                (1 << (3 * 8)) - 1, // because gas_credit is stored as VarUInteger3
+                min(gas_info.gas_credit, gas_max)
+            );
         }
-        std::cmp::min(gas_max, gas_info.calc_gas(msg_balance))
+        min(gas_max, gas_info.calc_gas(msg_balance))
     };
     log::debug!(
         target: "executor", 
