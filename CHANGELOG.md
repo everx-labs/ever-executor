@@ -2,13 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version: 1.15.183
+
+### Fixes
+
+- check gas limit and credit for overflow
+
 ## Version: 1.15.177
 
 ### New
 
 - capability CapBounceAfterFailedAction: if transaction fails on Action phase,
 bounced message will be produced 
-
 
 ## Version: 1.15.128
 
