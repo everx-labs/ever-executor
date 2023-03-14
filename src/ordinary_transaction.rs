@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2023 EverX. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -12,7 +12,7 @@
 */
 
 use crate::{
-    ActionPhaseResult, blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError,
+    ActionPhaseResult, blockchain_config::BlockchainConfig, error::ExecutorError,
     ExecuteParams, TransactionExecutor, VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES
 };
 #[cfg(feature = "timings")]
@@ -142,7 +142,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
             // extranal message comes serialized
-            let in_fwd_fee = self.config.get_fwd_prices(is_masterchain).fwd_fee_checked(&in_msg_cell)?;
+            let in_fwd_fee = self.config.calc_fwd_fee(is_masterchain, &in_msg_cell)?;
             log::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee, acc_balance.grams);
             if !acc_balance.grams.sub(&in_fwd_fee)? {
                 fail!(ExecutorError::NoFundsToImportMsg)

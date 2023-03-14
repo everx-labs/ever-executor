@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2023 EverX. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -52,15 +52,7 @@ impl TONDefaultConfig for MsgForwardPrices {
 }
 
 pub trait CalcMsgFwdFees {
-    #[deprecated]
-    fn fwd_fee(&self, msg_cell: &Cell) -> Grams {self.fwd_fee_checked(msg_cell).unwrap_or_default()}
-    #[deprecated]
-    fn ihr_fee(&self, fwd_fee: &Grams) -> Grams {self.ihr_fee_checked(fwd_fee).unwrap_or_default()}
-    #[deprecated]
-    fn mine_fee(&self, fwd_fee: &Grams) -> Grams {self.mine_fee_checked(fwd_fee).unwrap_or_default()}
-    #[deprecated]
-    fn next_fee(&self, fwd_fee: &Grams) -> Grams {self.next_fee_checked(fwd_fee).unwrap_or_default()}
-    fn fwd_fee_checked(&self, msg_cell: &Cell) -> Result<Grams>;
+    fn fwd_fee(&self, msg_cell: &Cell) -> u128;
     fn ihr_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
     fn mine_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
     fn next_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
@@ -71,7 +63,7 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// Forward fee is calculated according to the following formula:
     /// `fwd_fee = (lump_price + ceil((bit_price * msg.bits + cell_price * msg.cells)/2^16))`.
     /// `msg.bits` and `msg.cells` are calculated from message represented as tree of cells. Root cell is not counted.
-    fn fwd_fee_checked(&self, msg_cell: &Cell) -> Result<Grams> {
+    fn fwd_fee(&self, msg_cell: &Cell) -> u128 {
         let mut storage = StorageUsedShort::default();
         storage.append(msg_cell);
         let mut bits = storage.bits() as u128;
@@ -84,8 +76,7 @@ impl CalcMsgFwdFees for MsgForwardPrices {
         // but calculations are performed in integers, so prices are multiplied to some big
         // number (0xffff) and fee calculation uses such values. At the end result is divided by
         // 0xffff with ceil rounding to obtain nanograms (add 0xffff and then `>> 16`)
-        let fwd_fee = self.lump_price as u128 + ((cells * self.cell_price as u128 + bits * self.bit_price as u128 + 0xffff) >> 16);
-        Grams::new(fwd_fee)
+        self.lump_price as u128 + ((cells * self.cell_price as u128 + bits * self.bit_price as u128 + 0xffff) >> 16)
     }
 
     /// Calculate message IHR fee
@@ -292,15 +283,28 @@ impl BlockchainConfig {
         }
     }
 
+    /// Calculate forward fee
+    pub fn calc_fwd_fee(&self, is_masterchain: bool, msg_cell: &Cell) -> Result<Grams> {
+        let mut in_fwd_fee = self.get_fwd_prices(is_masterchain).fwd_fee(msg_cell);
+        if self.raw_config.has_capability(GlobalCapabilities::CapFeeInGasUnits) {
+            in_fwd_fee = self.get_gas_config(is_masterchain).calc_gas_fee(in_fwd_fee.try_into()?)
+        }
+        Grams::new(in_fwd_fee)
+    }
+
     /// Calculate account storage fee
-    pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> u128 {
-        self.storage_prices.calc_storage_fee(
+    pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> Result<Grams> {
+        let mut storage_fee = self.storage_prices.calc_storage_fee(
             storage.used().cells().into(),
             storage.used().bits().into(),
             storage.last_paid(),
             now,
             is_masterchain
-        )
+        );
+        if self.raw_config.has_capability(GlobalCapabilities::CapFeeInGasUnits) {
+            storage_fee = self.get_gas_config(is_masterchain).calc_gas_fee(storage_fee.try_into()?)
+        }
+        Grams::new(storage_fee)
     }
 
     /// Check if account is special TON account
