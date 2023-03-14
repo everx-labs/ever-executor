@@ -1052,9 +1052,12 @@ fn check_rewrite_dest_addr(
         }
     }
 
+    let cap_workchains = config.raw_config().has_capability(GlobalCapabilities::CapWorkchains);
     let is_masterchain = workchain_id == MASTERCHAIN_ID;
     if !is_masterchain {
-        if !(my_addr.workchain_id() == workchain_id || my_addr.workchain_id() == MASTERCHAIN_ID) {
+        if !cap_workchains &&
+           my_addr.workchain_id() != workchain_id && my_addr.workchain_id() != MASTERCHAIN_ID
+        {
             log::debug!(
                 target: "executor", 
                 "cannot send message from {} to {} it doesn't allow yet", 
@@ -1093,7 +1096,9 @@ fn check_rewrite_dest_addr(
             return Err(IncorrectCheckRewrite::Other);
         }
     } else {
-        if my_addr.workchain_id() != MASTERCHAIN_ID && my_addr.workchain_id() != BASE_WORKCHAIN_ID {
+        if !cap_workchains &&
+           my_addr.workchain_id() != MASTERCHAIN_ID && my_addr.workchain_id() != BASE_WORKCHAIN_ID 
+        {
             log::debug!(
                 target: "executor", 
                 "masterchain cannot accept from {} workchain", 
