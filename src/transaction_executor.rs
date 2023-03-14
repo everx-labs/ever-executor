@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2023 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2023 Everx. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -218,20 +218,19 @@ pub trait TransactionExecutor {
                 )
             )
         }
-        let storage_fee = match acc.storage_info() {
+        let mut fee = match acc.storage_info() {
             Some(storage_info) => {
                 self.config().calc_storage_fee(
                     storage_info,
                     is_masterchain,
                     tr.now(),
-                )
+                )?
             }
             None => {
                 log::debug!(target: "executor", "Account::None");
                 return Ok(Default::default())
             }
         };
-        let mut fee = Grams::new(storage_fee)?;
         if let Some(due_payment) = acc.due_payment() {
             fee.add(due_payment)?;
             acc.set_due_payment(None);
@@ -795,7 +794,7 @@ pub trait TransactionExecutor {
             }
         }
 
-        let fwd_prices = self.config().get_fwd_prices(msg.is_masterchain());
+        let is_masterchain = msg.is_masterchain();
 
         // create header for new bounced message and swap src and dst addresses
         header.ihr_disabled = true;
@@ -829,12 +828,13 @@ pub trait TransactionExecutor {
             storage.append(&serialized_message);
             let storage_bits = storage.bits() - serialized_message.bit_length() as u64;
             let storage_cells = storage.cells() - 1;
-            let fwd_full_fees = fwd_prices.fwd_fee_checked(&serialized_message)?;
+            let fwd_full_fees = self.config().calc_fwd_fee(is_masterchain, &serialized_message)?;
             (StorageUsedShort::with_values_checked(storage_cells, storage_bits)?, fwd_full_fees)
         } else {
-            let fwd_full_fees = fwd_prices.fwd_fee_checked(&Cell::default())?;
+            let fwd_full_fees = self.config().calc_fwd_fee(is_masterchain, &Cell::default())?;
             (StorageUsedShort::with_values_checked(0, 0)?, fwd_full_fees)
         };
+        let fwd_prices = self.config().get_fwd_prices(is_masterchain);
         let fwd_mine_fees = fwd_prices.mine_fee_checked(&fwd_full_fees)?;
         let fwd_fees = fwd_full_fees - fwd_mine_fees;
 
@@ -1203,13 +1203,13 @@ fn outmsg_action_handler(
     let compute_fwd_fee = if is_special {
         Grams::default()
     } else {
-        match msg.serialize().and_then(|cell| fwd_prices.fwd_fee_checked(&cell)) {
-            Err(err) => {
+        msg
+            .serialize()
+            .and_then(|cell| config.calc_fwd_fee(msg.is_masterchain(), &cell))
+            .map_err(|err| {
                 log::error!(target: "executor", "cannot serialize message in action phase : {}", err);
-                return Err(RESULT_CODE_ACTIONLIST_INVALID)
-            }
-            Ok(fee) => fee
-        }
+                RESULT_CODE_ACTIONLIST_INVALID
+            })?
     };
 
     if let Some(int_header) = msg.int_header_mut() {

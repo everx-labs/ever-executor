@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version: 1.15.188
+
+### News
+
+- check capability for calculating forward and storage fees
+
 ## Version: 1.15.183
 
 ### Fixes
