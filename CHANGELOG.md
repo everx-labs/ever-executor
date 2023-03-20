@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.15.190
+
+- Add test for CapFeeInGasUnits
+
 ## Version: 1.15.188
 
 ### News
