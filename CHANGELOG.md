@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.15.191
+
+- Supported ever-types version 2.0
+
 ## Version 1.15.190
 
 - Add test for CapFeeInGasUnits
