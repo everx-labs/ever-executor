@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 TON Labs. All Rights Reserved.
+ * Copyright (C) 2022 - 2023 EverX. All Rights Reserved.
  *
  * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
  * this file except in compliance with the License.
@@ -12,16 +12,11 @@
  */
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use failure::{err_msg, bail};
 use serde::{Serialize, Deserialize};
 use ton_block::{Deserializable, Account, Transaction, ConfigParams, Serializable, TransactionDescr};
 use ton_executor::{BlockchainConfig, ExecuteParams, OrdinaryTransactionExecutor, TickTockTransactionExecutor, TransactionExecutor};
-use ton_types::{Result, UInt256, Cell, Status};
+use ton_types::{error, fail, Result, UInt256, Cell, Status};
 use std::sync::{Arc, atomic::AtomicU64};
-
-use std::sync::atomic::Ordering;
-use ton_block::transactions::TrComputePhase;
-use ton_executor::CalcMsgFwdFees;
 
 #[path = "../src/tests/common/mod.rs"]
 mod common;
@@ -297,7 +292,7 @@ struct BlockAccountData {
 
 fn load_blockchain_config(config_account: &Account) -> Result<BlockchainConfig> {
     let config_cell = config_account
-        .get_data().ok_or(err_msg("config account data loading error"))?
+        .get_data().ok_or_else(|| error!("config account data loading error"))?
         .reference(0).ok();
     let config_params = ConfigParams::with_address_and_params(
         UInt256::with_array([0x55; 32]), config_cell);
@@ -335,7 +330,7 @@ fn replay_block(data: BlockData) -> Status {
                     TransactionDescr::Ordinary(_) => {
                         Box::new(OrdinaryTransactionExecutor::new(data.config.clone()))
                     }
-                    _ => bail!("unknown transaction type")
+                    _ => fail!("unknown transaction type")
                 };
             executor.execute_with_libs_and_params(
                 tr.read_in_msg()?.as_ref(),
@@ -348,7 +343,7 @@ fn replay_block(data: BlockData) -> Status {
                 }
             )?;
             if account.repr_hash() != tr.read_state_update()?.new_hash {
-                bail!("new hash mismatch");
+                fail!("new hash mismatch");
             }
         }
     }
