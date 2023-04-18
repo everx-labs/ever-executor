@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.15.196
+
+- Removed extra crates bas64
+- Minor refactoring
+
 ## Version 1.15.191
 
 - Supported ever-types version 2.0
