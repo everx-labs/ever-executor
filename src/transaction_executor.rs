@@ -955,14 +955,16 @@ fn compute_new_state(
         }
         //Account exists, but can be in different states.
         AccountStatus::AccStateActive => {
-            if let Some(suspended_addresses) = config.raw_config().suspended_addresses()? {
-                let addr = acc.get_addr().ok_or_else(|| error!("active account must have address"))?;
-                let wc = addr.workchain_id();
-                let addr = UInt256::construct_from(&mut addr.address())?;
+            if config.has_capability(GlobalCapabilities::CapSuspendedList) {
+                if let Some(suspended_addresses) = config.raw_config().suspended_addresses()? {
+                    let addr = acc.get_addr().ok_or_else(|| error!("active account must have address"))?;
+                    let wc = addr.workchain_id();
+                    let addr = UInt256::construct_from(&mut addr.address())?;
 
-                if suspended_addresses.is_suspended(wc, addr)? {
-                    log::debug!(target: "executor", "account is suspended");
-                    return Ok(Some(ComputeSkipReason::Suspended));
+                    if suspended_addresses.is_suspended(wc, addr)? {
+                        log::debug!(target: "executor", "account is suspended");
+                        return Ok(Some(ComputeSkipReason::Suspended));
+                    }
                 }
             }
 
