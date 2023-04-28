@@ -947,7 +947,7 @@ fn compute_new_state(
 ) -> Result<Option<ComputeSkipReason>> {
     log::debug!(target: "executor", "compute_account_state");
     let init_code_hash = config.has_capability(GlobalCapabilities::CapInitCodeHash);
-    let disable_set_lib = config.has_capability(GlobalCapabilities::CapSetLibCode);
+    let disable_set_lib = !config.has_capability(GlobalCapabilities::CapSetLibCode);
     match acc.status() {
         AccountStatus::AccStateNonexist => {
             log::error!(target: "executor", "account must exist");
