@@ -373,7 +373,7 @@ pub trait TransactionExecutor {
             if let Some(state_init) = msg.state_init() {
                 libs.push(state_init.libraries().inner());
             }
-            if let Some(reason) = compute_new_state(&mut result_acc, acc_balance, msg, init_code_hash, libs_disabled) {
+            if let Some(reason) = compute_new_state(&mut result_acc, acc_balance, msg, self.config())? {
                 if !init_code_hash {
                     *acc = result_acc;
                 }
@@ -943,20 +943,34 @@ fn compute_new_state(
     acc: &mut Account,
     acc_balance: &CurrencyCollection,
     in_msg: &Message,
-    init_code_hash: bool,
-    disable_set_lib: bool,
-) -> Option<ComputeSkipReason> {
+    config: &BlockchainConfig,
+) -> Result<Option<ComputeSkipReason>> {
     log::debug!(target: "executor", "compute_account_state");
+    let init_code_hash = config.has_capability(GlobalCapabilities::CapInitCodeHash);
+    let disable_set_lib = !config.has_capability(GlobalCapabilities::CapSetLibCode);
     match acc.status() {
         AccountStatus::AccStateNonexist => {
             log::error!(target: "executor", "account must exist");
-            Some(if in_msg.state_init().is_none() {ComputeSkipReason::NoState} else {ComputeSkipReason::BadState})
+            Ok(Some(if in_msg.state_init().is_none() {ComputeSkipReason::NoState} else {ComputeSkipReason::BadState}))
         }
         //Account exists, but can be in different states.
         AccountStatus::AccStateActive => {
+            if config.has_capability(GlobalCapabilities::CapSuspendedList) {
+                if let Some(suspended_addresses) = config.raw_config().suspended_addresses()? {
+                    let addr = acc.get_addr().ok_or_else(|| error!("active account must have address"))?;
+                    let wc = addr.workchain_id();
+                    let addr = UInt256::construct_from(&mut addr.address())?;
+
+                    if suspended_addresses.is_suspended(wc, addr)? {
+                        log::debug!(target: "executor", "account is suspended");
+                        return Ok(Some(ComputeSkipReason::Suspended));
+                    }
+                }
+            }
+
             //account is active, just return it
             log::debug!(target: "executor", "account state: AccountActive");
-            None
+            Ok(None)
         }
         AccountStatus::AccStateUninit => {
             log::debug!(target: "executor", "AccountUninit");
@@ -966,18 +980,18 @@ fn compute_new_state(
                 log::debug!(target: "executor", "message for uninitialized: activated");
                 let text = "Cannot construct account from message with hash";
                 if !check_libraries(state_init, disable_set_lib, text, in_msg) {
-                    return Some(ComputeSkipReason::BadState);
+                    return Ok(Some(ComputeSkipReason::BadState));
                 }
                 match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                     Err(err) => {
                         log::debug!(target: "executor", "reason: {}", err);
-                        Some(ComputeSkipReason::BadState)
+                        Ok(Some(ComputeSkipReason::BadState))
                     }
-                    Ok(_) => None
+                    Ok(_) => Ok(None)
                 }
             } else {
                 log::debug!(target: "executor", "message for uninitialized: skip computing phase");
-                Some(ComputeSkipReason::NoState)
+                Ok(Some(ComputeSkipReason::NoState))
             }
         }
         AccountStatus::AccStateFrozen => {
@@ -988,21 +1002,21 @@ fn compute_new_state(
                 if let Some(state_init) = in_msg.state_init() {
                     let text = "Cannot unfreeze account from message with hash";
                     if !check_libraries(state_init, disable_set_lib, text, in_msg) {
-                        return Some(ComputeSkipReason::BadState);
+                        return Ok(Some(ComputeSkipReason::BadState));
                     }
                     log::debug!(target: "executor", "message for frozen: activated");
                     return match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                         Err(err) => {
                             log::debug!(target: "executor", "reason: {}", err);
-                            Some(ComputeSkipReason::BadState)
+                            Ok(Some(ComputeSkipReason::BadState))
                         }
-                        Ok(_) => None
+                        Ok(_) => Ok(None)
                     }
                 }
             }
             //skip computing phase, because account is frozen (bad state)
             log::debug!(target: "executor", "account is frozen (bad state): skip computing phase");
-            Some(ComputeSkipReason::NoState)
+            Ok(Some(ComputeSkipReason::NoState))
         }
     }
 }
