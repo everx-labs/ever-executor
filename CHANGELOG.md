@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.16.0
+
+- Skiped compute phase for suspended addresses
+
 ## Version 1.15.196
 
 - Removed extra crates bas64
