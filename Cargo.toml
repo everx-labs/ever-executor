@@ -2,15 +2,15 @@
 build = 'common/build/build.rs'
 edition = '2021'
 name = 'ton_executor'
-version = '1.16.14'
+version = '1.16.15'
 
 [dependencies]
 failure = '0.1.6'
 lazy_static = '1.4'
 log = '0.4'
-ton_block = { git = 'https://github.com/tonlabs/ever-block.git', tag = '1.9.62' }
-ton_types = { git = 'https://github.com/tonlabs/ever-types.git', tag = '2.0.8' }
-ton_vm = { git = 'https://github.com/tonlabs/ever-vm.git', tag = '1.8.150' }
+ton_block = { git = 'https://github.com/tonlabs/ever-block.git', tag = '1.9.63' }
+ton_types = { git = 'https://github.com/tonlabs/ever-types.git', tag = '2.0.9' }
+ton_vm = { git = 'https://github.com/tonlabs/ever-vm.git', tag = '1.8.151' }
 
 [features]
 signature_with_id = [ 'ton_block/signature_with_id', 'ton_vm/signature_with_id' ]
