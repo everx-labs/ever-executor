@@ -73,9 +73,6 @@ pub enum IncorrectCheckRewrite {
     Other
 }
 
-
-
-
 pub struct ExecuteParams {
     pub state_libs: HashmapE,
     pub block_unixtime: u32,

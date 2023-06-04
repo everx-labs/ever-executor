@@ -31,13 +31,6 @@ use ton_vm::{
     stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
 };
 
-
-
-
-
-
-
-
 pub struct OrdinaryTransactionExecutor {
     config: BlockchainConfig,
 
