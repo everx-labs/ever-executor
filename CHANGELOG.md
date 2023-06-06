@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.16.40
+
+- Disable debug symbols by default
+
 ## Version 1.16.0
 
 - Skiped compute phase for suspended addresses
