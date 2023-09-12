@@ -868,7 +868,7 @@ pub trait TransactionExecutor {
     fn copyleft_action_handler(
         &self,
         compute_phase_fees: &Grams,
-        mut phase: &mut TrActionPhase,
+        phase: &mut TrActionPhase,
         actions: &LinkedList<OutAction>,
     ) -> Result<Option<CopyleftReward>> {
         let mut copyleft_reward = Grams::zero();
