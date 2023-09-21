@@ -8,9 +8,9 @@ version = '1.16.82'
 failure = '0.1.6'
 lazy_static = '1.4'
 log = '0.4'
-ton_block = { git = 'https://github.com/tonlabs/ever-block.git', tag = '1.9.104' }
-ton_types = { git = 'https://github.com/tonlabs/ever-types.git', tag = '2.0.28' }
-ton_vm = { git = 'https://github.com/tonlabs/ever-vm.git', tag = '1.8.211' }
+ton_block = { git = 'ssh://git@github.com/tonlabs/ever-block.git', tag = 'tag-tmp-rc' }
+ton_types = { git = 'ssh://git@github.com/tonlabs/ever-types.git', tag = 'tag-tmp-rc' }
+ton_vm = { git = 'ssh://git@github.com/tonlabs/ever-vm.git', tag = 'tag-tmp-rc' }
 
 [features]
 signature_with_id = [ 'ton_block/signature_with_id', 'ton_vm/signature_with_id' ]
