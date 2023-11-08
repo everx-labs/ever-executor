@@ -613,6 +613,17 @@ pub trait TransactionExecutor {
             return Ok(ActionPhaseResult::from_phase(phase));
         }
 
+        // The ChangeLibrary action can be created by VM in two ways:
+        // 1) by the SETLIBCODE and CHANGELIB insns,
+        // 2) manually by modifying the c5 register.
+        //
+        // In the case of CapSetLibCode is not set, (1) is denied by VM but (2) is still available.
+        // To deny (2) too, CapSetLibCode needs to be checked here in executor. However, since the
+        // executor's behavior gets modified, an additional capability must be checked beforehand.
+        let is_change_library_denied =
+            self.config().has_capability(GlobalCapabilities::CapTvmV19) &&
+            !self.config().has_capability(GlobalCapabilities::CapSetLibCode);
+
         for (i, action) in actions.iter_mut().enumerate() {
             log::debug!(target: "executor", "\nAction #{}\nType: {}\nInitial balance: {}",
                 i,
@@ -670,6 +681,8 @@ pub trait TransactionExecutor {
                         Some(code) => code
                     }
                 }
+                OutAction::ChangeLibrary { .. } if is_change_library_denied =>
+                    RESULT_CODE_UNKNOWN_OR_INVALID_ACTION,
                 OutAction::ChangeLibrary{ mode, code, hash} => {
                     match change_library_action_handler(&mut acc_copy, mode, code, hash) {
                         None => {
