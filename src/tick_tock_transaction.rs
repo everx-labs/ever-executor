@@ -16,7 +16,7 @@ use crate::{blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecu
 use std::sync::atomic::Ordering;
 use ton_block::{
     Account, CurrencyCollection, Grams, Message, TrComputePhase, Transaction, 
-    TransactionDescr, TransactionDescrTickTock, TransactionTickTock, Serializable
+    TransactionDescr, TransactionDescrTickTock, TransactionTickTock, Serializable, CommonMessage
 };
 use ton_types::{error, fail, Result, HashmapType, SliceData};
 use ton_vm::{
@@ -43,7 +43,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     /// Create end execute tick or tock transaction for special account
     fn execute_with_params(
         &self,
-        in_msg: Option<&Message>,
+        in_msg: Option<&CommonMessage>,
         account: &mut Account,
         params: ExecuteParams,
     ) -> Result<Transaction> {
@@ -70,7 +70,8 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             account.last_tr_time().unwrap_or_default(), 
             params.last_tr_lt.load(Ordering::Relaxed)
         );
-        let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
+        let mut tr = self.create_transaction(account_id.clone());
+        tr.orig_status = account.status();
         tr.set_logical_time(lt);
         tr.set_now(params.block_unixtime);
         account.set_last_paid(0);

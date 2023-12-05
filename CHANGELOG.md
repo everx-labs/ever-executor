@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.17.0
+
+- Support Common Message
+- Support of common msg in executor
+
 ## Version 1.16.85
 
 - Deny ChangeLibrary action when CapSetLibCode is unset

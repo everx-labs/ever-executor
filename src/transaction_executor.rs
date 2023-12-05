@@ -28,7 +28,7 @@ use std::{
     },
 };
 use ton_block::{ 
-    AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, ComputeSkipReason,
+    AccStatusChange, Account, AccountStatus, AddSub, CommonMessage, CommonMsgInfo, ComputeSkipReason,
     CopyleftReward, CurrencyCollection, Deserializable, ExtraCurrencyCollection, GasLimitsPrices,
     GetRepresentationHash, GlobalCapabilities, Grams, HashUpdate, Message, MsgAddressInt,
     OutAction, OutActions, Serializable, StateInit, StorageUsedShort, TrActionPhase, TrBouncePhase,
@@ -36,7 +36,7 @@ use ton_block::{
     BASE_WORKCHAIN_ID, MASTERCHAIN_ID, RESERVE_ALL_BUT, RESERVE_IGNORE_ERROR, RESERVE_PLUS_ORIG,
     RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_REMAINING_MSG_BALANCE,
-    SENDMSG_VALID_FLAGS,
+    SENDMSG_VALID_FLAGS, SERDE_OPTS_COMMON_MESSAGE,
 };
 use ton_types::{
     error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256, SliceData,
@@ -91,12 +91,12 @@ pub struct ExecuteParams {
 
 pub struct ActionPhaseResult {
     pub phase: TrActionPhase,
-    pub messages: Vec<Message>,
+    pub messages: Vec<CommonMessage>,
     pub copyleft_reward: Option<CopyleftReward>,
 }
 
 impl ActionPhaseResult {
-    fn new(phase: TrActionPhase, messages: Vec<Message>, copyleft_reward: Option<CopyleftReward>) -> ActionPhaseResult {
+    fn new(phase: TrActionPhase, messages: Vec<CommonMessage>, copyleft_reward: Option<CopyleftReward>) -> ActionPhaseResult {
         ActionPhaseResult{phase, messages, copyleft_reward}
     }
 
@@ -129,14 +129,14 @@ pub trait TransactionExecutor {
     
     fn execute_with_params(
         &self,
-        in_msg: Option<&Message>,
+        in_msg: Option<&CommonMessage>,
         account: &mut Account,
         params: ExecuteParams,
     ) -> Result<Transaction>;
 
     fn execute_with_libs_and_params(
         &self,
-        in_msg: Option<&Message>,
+        in_msg: Option<&CommonMessage>,
         account_root: &mut Cell,
         params: ExecuteParams,
     ) -> Result<Transaction> {
@@ -537,7 +537,7 @@ pub trait TransactionExecutor {
         new_data: Option<Cell>,
         my_addr: &MsgAddressInt,
         is_special: bool,
-    ) -> Result<(TrActionPhase, Vec<Message>)> {
+    ) -> Result<(TrActionPhase, Vec<CommonMessage>)> {
         let result = self.action_phase_with_copyleft(
             tr, acc, original_acc_balance, acc_balance, msg_remaining_balance,
             compute_phase_fees, actions_cell, new_data, my_addr, is_special)?;
@@ -707,7 +707,7 @@ pub trait TransactionExecutor {
 
         for (i, mode, mut out_msg) in out_msgs0.into_iter() {
             if (mode & SENDMSG_ALL_BALANCE) == 0 {
-                out_msgs.push(out_msg);
+                out_msgs.push(CommonMessage::Std(out_msg));
                 continue
             }
             log::debug!(target: "executor", "\nSend message with all balance:\nInitial balance: {}",
@@ -729,7 +729,7 @@ pub trait TransactionExecutor {
             let err_code = match result {
                 Ok(_) => {
                     phase.msgs_created += 1;
-                    out_msgs.push(out_msg);
+                    out_msgs.push(CommonMessage::Std(out_msg));
                     0
                 }
                 Err(code) => code
@@ -784,9 +784,9 @@ pub trait TransactionExecutor {
         tr: &mut Transaction,
         my_addr: &MsgAddressInt,
         block_version: u32,
-    ) -> Result<(TrBouncePhase, Option<Message>)> {
+    ) -> Result<(TrBouncePhase, Option<CommonMessage>)> {
         let header = msg.int_header()
-            .ok_or_else(|| error!("Not found msg internal header"))?;
+        .ok_or_else(|| error!("Not found msg internal header"))?;
         if !header.bounce {
             fail!("Bounce flag not set")
         }
@@ -803,9 +803,6 @@ pub trait TransactionExecutor {
                 fail!("Incorrect destination address in a bounced message {}", header.dst)
             }
         }
-
-        let is_masterchain = msg.is_masterchain();
-
         // create header for new bounced message and swap src and dst addresses
         header.ihr_disabled = true;
         header.bounce = false;
@@ -831,8 +828,15 @@ pub trait TransactionExecutor {
             }
         }
 
+        let is_masterchain = msg.is_masterchain();
+        let mut bounce_msg = CommonMessage::Std(bounce_msg);
         // calculated storage for bounced message is empty
-        let serialized_message = bounce_msg.serialize()?;
+        let serialized_message = 
+            if self.config().has_capability(GlobalCapabilities::CapCommonMessage) {
+                bounce_msg.serialize_with_opts(SERDE_OPTS_COMMON_MESSAGE)?
+            } else {
+                bounce_msg.serialize()?
+            };
         let (storage, fwd_full_fees) = if block_version >= VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE {
             let mut storage = StorageUsedShort::default();
             storage.append(&serialized_message);
@@ -861,7 +865,7 @@ pub trait TransactionExecutor {
         acc_balance.sub(&remaining_msg_balance)?;
         remaining_msg_balance.grams.sub(&fwd_full_fees)?;
         remaining_msg_balance.grams.sub(compute_phase_fees)?;
-        match bounce_msg.header_mut() {
+        match bounce_msg.get_std_mut()?.header_mut() {
             CommonMsgInfo::IntMsgInfo(header) => {
                 header.value = remaining_msg_balance.clone();
                 header.fwd_fee = fwd_fees;
@@ -872,7 +876,7 @@ pub trait TransactionExecutor {
         log::debug!(
             target: "executor", 
             "bounce fees: {} bounce value: {}", 
-            fwd_mine_fees, bounce_msg.get_value().unwrap().grams
+            fwd_mine_fees, bounce_msg.get_std()?.get_value().unwrap().grams
         );
         tr.add_fee_grams(&fwd_mine_fees)?;
         Ok((TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees), Some(bounce_msg)))
@@ -927,19 +931,32 @@ pub trait TransactionExecutor {
     }
 
     fn add_messages(
-        &self, 
-        tr: &mut Transaction, 
-        out_msgs: Vec<Message>, 
-        lt: Arc<AtomicU64>
+        &self,
+        tr: &mut Transaction,
+        out_msgs: Vec<CommonMessage>,
+        lt: Arc<AtomicU64>,
     ) -> Result<u64> {
         let mut lt = lt.fetch_add(1 + out_msgs.len() as u64, Ordering::Relaxed);
         lt += 1;
         for mut msg in out_msgs {
-            msg.set_at_and_lt(tr.now(), lt);
+            if let Ok(std_msg) = msg.get_std_mut() {
+                std_msg.set_at_and_lt(tr.now(), lt);
+            }
             tr.add_out_message(&msg)?;
             lt += 1;
         }
         Ok(lt)
+    }
+
+    fn create_transaction(
+        &self,
+        account_id: AccountId,
+    ) -> Transaction {
+        if self.config().has_capability(GlobalCapabilities::CapCommonMessage) {
+            Transaction::with_common_msg_support(account_id)
+        } else {
+            Transaction::with_address_and_status(account_id, AccountStatus::AccStateNonexist)
+        }
     }
 
 }
