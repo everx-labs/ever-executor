@@ -211,7 +211,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let config_params = self.config().raw_config().config_params.data().cloned();
         let mut smc_info = SmartContractInfo {
             capabilities: self.config().raw_config().capabilities(),
-            myself: SliceData::load_builder(account_address.write_to_new_cell().unwrap_or_default()).unwrap(),
+            myself: SliceData::load_builder(account_address.write_to_new_cell().unwrap_or_default())?,
             block_lt: params.block_lt,
             trans_lt: lt,
             unix_time: params.block_unixtime,
@@ -387,11 +387,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
     }
     fn ordinary_transaction(&self) -> bool { true }
     fn config(&self) -> &BlockchainConfig { &self.config }
-    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Stack {
+    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Result<Stack> {
         let mut stack = Stack::new();
         let in_msg = match in_msg {
             Some(in_msg) => in_msg,
-            None => return stack
+            None => return Ok(stack)
         };
         let acc_balance = int!(account.balance().map_or(0, |value| value.grams.as_u128()));
         let msg_balance = int!(in_msg.get_value().map_or(0, |value| value.grams.as_u128()));
@@ -404,6 +404,6 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             .push(StackItem::Cell(in_msg_cell))
             .push(StackItem::Slice(body_slice))
             .push(function_selector);
-        stack
+        Ok(stack)
     }
 }
