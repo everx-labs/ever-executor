@@ -39,7 +39,7 @@ use ton_block::{
     SENDMSG_VALID_FLAGS,
 };
 use ton_types::{
-    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256, SliceData,
+    error, fail, AccountId, Cell, ExceptionCode, HashmapE, IBitstring, Result, UInt256, SliceData,
 };
 use ton_vm::executor::BehaviorModifiers;
 use ton_vm::{
@@ -157,7 +157,7 @@ pub trait TransactionExecutor {
         transaction.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
         Ok(transaction)
     }
-
+/* 
     #[deprecated]
     fn build_contract_info(
         &self, 
@@ -181,12 +181,12 @@ pub trait TransactionExecutor {
         };
         smci.calc_rand_seed(seed_block, &acc_address.address().get_bytestring(0));
         smci
-    }
+    }*/
 
     fn ordinary_transaction(&self) -> bool;
     fn config(&self) -> &BlockchainConfig;
 
-    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Stack;
+    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Result<Stack>;
 
     /// Implementation of transaction's storage phase.
     /// If account does not exist - phase skipped.

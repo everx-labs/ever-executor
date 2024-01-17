@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.16.106
+
+- Remove compiler warning
+- Remove unwraps that lead to panic
+
 ## Version 1.16.85
 
 - Deny ChangeLibrary action when CapSetLibCode is unset
