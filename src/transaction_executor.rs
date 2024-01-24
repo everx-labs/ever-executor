@@ -58,6 +58,7 @@ const RESULT_CODE_NOT_ENOUGH_GRAMS:              i32 = 37;
 const RESULT_CODE_NOT_ENOUGH_EXTRA:              i32 = 38;
 const RESULT_CODE_INVALID_BALANCE:               i32 = 40;
 const RESULT_CODE_BAD_ACCOUNT_STATE:             i32 = 41;
+const RESULT_CODE_NON_ZERO_CELL_LEVEL:           i32 = 42;
 const RESULT_CODE_ANYCAST:                       i32 = 50;
 const RESULT_CODE_NOT_FOUND_LICENSE:             i32 = 51;
 const RESULT_CODE_UNSUPPORTED:                   i32 = -1;
@@ -497,7 +498,13 @@ pub trait TransactionExecutor {
         }
 
         let new_data = if let Ok(cell) = vm.get_committed_state().get_root().as_cell() {
-            Some(cell.clone())
+            if cell.level() > 0 {
+                log::trace!(target: "executor", "non-zero level in c4");
+                vm_phase.success = false;
+                None
+            } else {
+                Some(cell.clone())
+            }
         } else {
             log::debug!(target: "executor", "invalid contract, it must be cell in c4 register");
             vm_phase.success = false;
@@ -989,7 +996,7 @@ fn compute_new_state(
                 // borrow code and data from it and switch account state to 'active'.
                 log::debug!(target: "executor", "message for uninitialized: activated");
                 let text = "Cannot construct account from message with hash";
-                if !check_libraries(state_init, disable_set_lib, text, in_msg) {
+                if !check_state_init(state_init, disable_set_lib, text, in_msg) {
                     return Ok(Some(ComputeSkipReason::BadState));
                 }
                 match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
@@ -1011,7 +1018,7 @@ fn compute_new_state(
             if !acc_balance.grams.is_zero() { // This check is redundant
                 if let Some(state_init) = in_msg.state_init() {
                     let text = "Cannot unfreeze account from message with hash";
-                    if !check_libraries(state_init, disable_set_lib, text, in_msg) {
+                    if !check_state_init(state_init, disable_set_lib, text, in_msg) {
                         return Ok(Some(ComputeSkipReason::BadState));
                     }
                     log::debug!(target: "executor", "message for frozen: activated");
@@ -1453,6 +1460,9 @@ fn setcode_action_handler(acc: &mut Account, code: Cell) -> Option<i32> {
         acc.get_code().unwrap_or_default().repr_hash(),
         code.repr_hash(),
     );
+    if code.level() > 0 {
+        return Some(RESULT_CODE_NON_ZERO_CELL_LEVEL)
+    }
     match acc.set_code(code) {
         true => None,
         false => Some(RESULT_CODE_BAD_ACCOUNT_STATE)
@@ -1463,6 +1473,9 @@ fn change_library_action_handler(acc: &mut Account, mode: u8, code: Option<Cell>
     let result = match (code, hash) {
         (Some(code), None) => {
             log::debug!(target: "executor", "OutAction::ChangeLibrary mode: {}, code: {}", mode, code);
+            if code.level() > 0 {
+                return Some(RESULT_CODE_NON_ZERO_CELL_LEVEL)
+            }
             if mode == 0 { // TODO: Wrong codes. Look ton_block/out_actions::SET_LIB_CODE_REMOVE
                 acc.delete_library(&code.repr_hash())
             } else {
@@ -1521,13 +1534,31 @@ fn init_gas(
     Gas::new(gas_limit as i64, gas_credit as i64, gas_max as i64, gas_info.get_real_gas_price() as i64)
 }
 
-fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Message) -> bool {
+fn check_state_init(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Message) -> bool {
+    if let Some(cell) = init.code() {
+        if cell.level() > 0 {
+            log::debug!(target: "executor", "non-zero level in stateinit code");
+            return false;
+        }
+    }
+    if let Some(cell) = init.data() {
+        if cell.level() > 0 {
+            log::debug!(target: "executor", "non-zero level in stateinit data");
+            return false;
+        }
+    }
+    if let Some(cell) = init.libraries().root() {
+        if cell.level() > 0 {
+            log::debug!(target: "executor", "non-zero level in stateinit libs");
+            return false;
+        }
+    }
     match init.libraries().len() {
         Ok(len) => {
             if !disable_set_lib || len == 0 {
                 true
             } else {
-                log::trace!(
+                log::debug!(
                     target: "executor",
                     "{} {:x} because libraries are disabled",
                         text, msg.hash().unwrap_or_default()
@@ -1536,7 +1567,7 @@ fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Me
             }
         }
         Err(err) => {
-            log::trace!(
+            log::debug!(
                 target: "executor",
                 "{} {:x} because libraries are broken {}",
                     text, msg.hash().unwrap_or_default(), err
@@ -1562,7 +1593,7 @@ fn account_from_message(
         if init.code().is_some() {
             if !check_address || (init.hash().ok()? == hdr.dst.address()) {
                 let text = "Cannot construct account from message with hash";
-                if check_libraries(init, disable_set_lib, text, msg) {
+                if check_state_init(init, disable_set_lib, text, msg) {
                     return Account::active_by_init_code_hash(
                         hdr.dst.clone(),
                         msg_remaining_balance.clone(),

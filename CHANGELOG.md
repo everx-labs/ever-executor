@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.16.108
+
+- Deny non-zero cell level in code/data/lib
+
 ## Version 1.16.106
 
 - Remove compiler warning
