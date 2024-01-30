@@ -2,7 +2,8 @@
 build = 'common/build/build.rs'
 edition = '2021'
 name = 'ton_executor'
-version = '1.16.109'
+version = '1.16.110'
+
 
 [dependencies]
 failure = '0.1.6'
@@ -10,10 +11,11 @@ lazy_static = '1.4'
 log = '0.4'
 ton_block = { git = 'https://github.com/tonlabs/ever-block.git', tag = '1.9.122' }
 ton_types = { git = 'https://github.com/tonlabs/ever-types.git', tag = '2.0.32' }
-ton_vm = { git = 'https://github.com/tonlabs/ever-vm.git', tag = '1.9.6' }
+ton_vm = { git = 'https://github.com/tonlabs/ever-vm.git', tag = '1.9.7' }
 
 [features]
 signature_with_id = [ 'ton_block/signature_with_id', 'ton_vm/signature_with_id' ]
+
 
 [[bench]]
 harness = false
@@ -21,6 +23,7 @@ name = 'benchmarks'
 
 [lib]
 bench = false
+
 
 [profile]
 
