@@ -245,10 +245,12 @@ pub trait TransactionExecutor {
             tr.add_fee_grams(&storage_fees_collected)?;
             fee.sub(&storage_fees_collected)?;
             let need_freeze = fee > Grams::from(self.config().get_gas_config(is_masterchain).freeze_due_limit);
-            let need_delete =
+            let need_delete = if self.config().has_capability(GlobalCapabilities::CapUndeletableAccounts) {
+                false 
+            } else {
                 (acc.status() == AccountStatus::AccStateUninit || acc.status() == AccountStatus::AccStateFrozen) &&
-                fee > Grams::from(self.config().get_gas_config(is_masterchain).delete_due_limit);
-
+                fee > Grams::from(self.config().get_gas_config(is_masterchain).delete_due_limit)
+            };
             if need_delete {
                 tr.total_fees_mut().add(acc_balance)?;
                 *acc = Account::default();
