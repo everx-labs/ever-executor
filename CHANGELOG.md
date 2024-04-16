@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.17.0
+
+- the crate was renamed from `ton_executor` to `ever_executor`
+- supported renaming of other crates
+
 ## Version 1.16.122
 
 - Do not delete frozen accounts (if related capability set)

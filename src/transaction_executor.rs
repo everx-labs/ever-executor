@@ -7,7 +7,7 @@
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
+* See the License for the specific EVERX DEV software governing permissions and
 * limitations under the License.
 */
 #![allow(clippy::too_many_arguments)]
@@ -27,7 +27,7 @@ use std::{
         Arc,
     },
 };
-use ton_block::{ 
+use ever_block::{ 
     AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, ComputeSkipReason,
     CopyleftReward, CurrencyCollection, Deserializable, ExtraCurrencyCollection, GasLimitsPrices,
     GetRepresentationHash, GlobalCapabilities, Grams, HashUpdate, Message, MsgAddressInt,
@@ -37,12 +37,11 @@ use ton_block::{
     RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_REMAINING_MSG_BALANCE,
     SENDMSG_VALID_FLAGS,
+    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256,
+    SliceData,
 };
-use ton_types::{
-    error, fail, AccountId, Cell, ExceptionCode, HashmapE, IBitstring, Result, UInt256, SliceData,
-};
-use ton_vm::executor::BehaviorModifiers;
-use ton_vm::{
+use ever_vm::executor::BehaviorModifiers;
+use ever_vm::{
     error::tvm_exception,
     executor::{gas::gas_state::Gas, IndexProvider},
     smart_contract_info::SmartContractInfo,
@@ -82,7 +81,7 @@ pub struct ExecuteParams {
     pub last_tr_lt: Arc<AtomicU64>,
     pub seed_block: UInt256,
     pub debug: bool,
-    pub trace_callback: Option<Arc<ton_vm::executor::TraceCallback>>,
+    pub trace_callback: Option<Arc<ever_vm::executor::TraceCallback>>,
     pub index_provider: Option<Arc<dyn IndexProvider>>,
     pub behavior_modifiers: Option<BehaviorModifiers>,
     pub block_version: u32,
@@ -1478,7 +1477,7 @@ fn change_library_action_handler(acc: &mut Account, mode: u8, code: Option<Cell>
             if code.level() > 0 {
                 return Some(RESULT_CODE_NON_ZERO_CELL_LEVEL)
             }
-            if mode == 0 { // TODO: Wrong codes. Look ton_block/out_actions::SET_LIB_CODE_REMOVE
+            if mode == 0 { // TODO: Wrong codes. Look ever_block/out_actions::SET_LIB_CODE_REMOVE
                 acc.delete_library(&code.repr_hash())
             } else {
                 acc.set_library(code, (mode & 2) == 2)

@@ -7,7 +7,7 @@
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
+* See the License for the specific EVERX DEV software governing permissions and
 * limitations under the License.
 */
 
@@ -20,13 +20,13 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 #[cfg(feature = "timings")]
 use std::time::Instant;
-use ton_block::{
+use ever_block::{
     AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message,
     Serializable, TrBouncePhase, TrComputePhase, Transaction, TransactionDescr,
     TransactionDescrOrdinary, MASTERCHAIN_ID, GlobalCapabilities
 };
-use ton_types::{error, fail, Result, HashmapType, SliceData};
-use ton_vm::{
+use ever_block::{error, fail, Result, HashmapType, SliceData};
+use ever_vm::{
     boolean, int,
     stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
 };

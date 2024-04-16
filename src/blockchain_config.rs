@@ -7,27 +7,27 @@
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
+* See the License for the specific EVERX DEV software governing permissions and
 * limitations under the License.
 */
 
-use ton_block::{
+use ever_block::{
     ConfigParam18, ConfigParams, FundamentalSmcAddresses, GasLimitsPrices, GlobalCapabilities, Grams,
     MsgAddressInt, MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
 };
-use ton_types::{Cell, Result, UInt256};
+use ever_block::{Cell, Result, UInt256};
 
 pub const VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES: u32 = 8;
 pub const VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE: u32 = 30;
 
-pub(crate) trait TONDefaultConfig {
+pub(crate) trait EVERXDefaultConfig {
     /// Get default value for masterchain
     fn default_mc() -> Self;
     /// Get default value for workchains
     fn default_wc() -> Self;
 }
 
-impl TONDefaultConfig for MsgForwardPrices {
+impl EVERXDefaultConfig for MsgForwardPrices {
     fn default_mc() -> Self {
         MsgForwardPrices {
             lump_price: 10000000,
@@ -164,7 +164,7 @@ impl AccStoragePrices {
     }
 }
 
-impl TONDefaultConfig for GasLimitsPrices {
+impl EVERXDefaultConfig for GasLimitsPrices {
     fn default_mc() -> Self {
         GasLimitsPrices {
             gas_price: 655360000,
@@ -307,7 +307,7 @@ impl BlockchainConfig {
         Grams::new(storage_fee)
     }
 
-    /// Check if account is special TON account
+    /// Check if account is special EVERX account
     pub fn is_special_account(&self, address: &MsgAddressInt) -> Result<bool> {
         if address.is_masterchain() {
             let account_id = address.get_address();
