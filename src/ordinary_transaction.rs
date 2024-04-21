@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2022 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2023 EverX. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -7,12 +7,12 @@
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
+* See the License for the specific EVERX DEV software governing permissions and
 * limitations under the License.
 */
 
 use crate::{
-    ActionPhaseResult, blockchain_config::{BlockchainConfig, CalcMsgFwdFees}, error::ExecutorError,
+    ActionPhaseResult, blockchain_config::BlockchainConfig, error::ExecutorError,
     ExecuteParams, TransactionExecutor, VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES
 };
 #[cfg(feature = "timings")]
@@ -20,21 +20,16 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 #[cfg(feature = "timings")]
 use std::time::Instant;
-use ton_block::{
-    AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message, Serializable,
-    TrBouncePhase, TrComputePhase, Transaction, TransactionDescr, TransactionDescrOrdinary, MASTERCHAIN_ID
+use ever_block::{
+    AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message,
+    Serializable, TrBouncePhase, TrComputePhase, Transaction, TransactionDescr,
+    TransactionDescrOrdinary, MASTERCHAIN_ID, GlobalCapabilities
 };
-use ton_types::{error, fail, Result, HashmapType, SliceData};
-use ton_vm::{
+use ever_block::{error, fail, Result, HashmapType, SliceData};
+use ever_vm::{
     boolean, int,
     stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
 };
-
-
-
-
-
-
 
 pub struct OrdinaryTransactionExecutor {
     config: BlockchainConfig,
@@ -140,7 +135,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
             // extranal message comes serialized
-            let in_fwd_fee = self.config.get_fwd_prices(is_masterchain).fwd_fee_checked(&in_msg_cell)?;
+            let in_fwd_fee = self.config.calc_fwd_fee(is_masterchain, &in_msg_cell)?;
             log::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee, acc_balance.grams);
             if !acc_balance.grams.sub(&in_fwd_fee)? {
                 fail!(ExecutorError::NoFundsToImportMsg)
@@ -216,7 +211,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let config_params = self.config().raw_config().config_params.data().cloned();
         let mut smc_info = SmartContractInfo {
             capabilities: self.config().raw_config().capabilities(),
-            myself: SliceData::load_builder(account_address.write_to_new_cell().unwrap_or_default()).unwrap(),
+            myself: SliceData::load_builder(account_address.write_to_new_cell().unwrap_or_default())?,
             block_lt: params.block_lt,
             trans_lt: lt,
             unix_time: params.block_unixtime,
@@ -260,6 +255,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let mut compute_phase_gas_fees = Grams::zero();
         let mut copyleft = None;
         description.compute_ph = compute_ph;
+        let mut new_acc_balance = acc_balance.clone();
         description.action = match &description.compute_ph {
             TrComputePhase::Vm(phase) => {
                 compute_phase_gas_fees = phase.gas_fees;
@@ -268,13 +264,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     log::debug!(target: "executor", "compute_phase: success");
                     log::debug!(target: "executor", "action_phase: lt={}", lt);
                     action_phase_processed = true;
-                    // since the balance is not used anywhere else if we have reached this point, 
-                    // then we can change it here
                     match self.action_phase_with_copyleft(
                         &mut tr,
                         account,
                         &original_acc_balance,
-                        &mut acc_balance,
+                        &mut new_acc_balance,
                         &mut msg_balance,
                         &compute_phase_gas_fees,
                         actions.unwrap_or_default(),
@@ -325,6 +319,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     *account = Account::default();
                     description.destroyed = true;
                 }
+                if phase.success {
+                    acc_balance = new_acc_balance;
+                }
                 !phase.success
             }
             None => {
@@ -335,7 +332,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
         if description.aborted && !is_ext_msg && bounce {
-            if !action_phase_processed {
+            if !action_phase_processed || self.config().has_capability(GlobalCapabilities::CapBounceAfterFailedAction) {
                 log::debug!(target: "executor", "bounce_phase");
                 description.bounce = match self.bounce_phase(
                     msg_balance.clone(),
@@ -390,11 +387,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
     }
     fn ordinary_transaction(&self) -> bool { true }
     fn config(&self) -> &BlockchainConfig { &self.config }
-    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Stack {
+    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Result<Stack> {
         let mut stack = Stack::new();
         let in_msg = match in_msg {
             Some(in_msg) => in_msg,
-            None => return stack
+            None => return Ok(stack)
         };
         let acc_balance = int!(account.balance().map_or(0, |value| value.grams.as_u128()));
         let msg_balance = int!(in_msg.get_value().map_or(0, |value| value.grams.as_u128()));
@@ -407,6 +404,6 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             .push(StackItem::Cell(in_msg_cell))
             .push(StackItem::Slice(body_slice))
             .push(function_selector);
-        stack
+        Ok(stack)
     }
 }

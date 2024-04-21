@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2019-2023 TON Labs. All Rights Reserved.
+* Copyright (C) 2019-2023 EverX. All Rights Reserved.
 *
 * Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
 * this file except in compliance with the License.
@@ -7,22 +7,22 @@
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
+* See the License for the specific EVERX DEV software governing permissions and
 * limitations under the License.
 */
 
-use ton_block::GlobalCapabilities;
-use ton_types::{Cell, HashmapE, SliceData, Result};
-use ton_vm::{
+use ever_block::GlobalCapabilities;
+use ever_block::{Cell, HashmapE, SliceData, Result};
+use ever_vm::{
     executor::{Engine, gas::gas_state::Gas}, smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem, savelist::SaveList}
 };
 use crate::BlockchainConfig;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct VMSetupContext {
     pub capabilities: u64,
     pub block_version: u32,
+    #[cfg(feature = "signature_with_id")]
     pub signature_id: i32,
 }
 
@@ -42,15 +42,15 @@ impl VMSetup {
 
     /// Creates new instance of VMSetup with contract code.
     /// Initializes some registers of TVM with predefined values.
-    pub fn with_context(code: SliceData, context: VMSetupContext) -> Self {
+    pub fn with_context(code: SliceData, ctx: VMSetupContext) -> Self {
         VMSetup {
-            vm: Engine::with_capabilities(context.capabilities),
+            vm: Engine::with_capabilities(ctx.capabilities),
             code,
             ctrls: SaveList::new(),
             stack: None,
             gas: Some(Gas::empty()),
             libraries: vec![],
-            ctx: context,
+            ctx,
         }
     }
 
@@ -153,6 +153,7 @@ impl VMSetup {
             self.libraries
         );
         vm.set_block_version(self.ctx.block_version);
+        #[cfg(feature = "signature_with_id")]
         vm.set_signature_id(self.ctx.signature_id);
         vm
     }
