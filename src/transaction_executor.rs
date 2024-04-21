@@ -7,7 +7,7 @@
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
+* See the License for the specific EVERX DEV software governing permissions and
 * limitations under the License.
 */
 #![allow(clippy::too_many_arguments)]
@@ -27,7 +27,7 @@ use std::{
         Arc,
     },
 };
-use ton_block::{ 
+use ever_block::{ 
     AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, ComputeSkipReason,
     CopyleftReward, CurrencyCollection, Deserializable, ExtraCurrencyCollection, GasLimitsPrices,
     GetRepresentationHash, GlobalCapabilities, Grams, HashUpdate, Message, MsgAddressInt,
@@ -37,12 +37,11 @@ use ton_block::{
     RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_REMAINING_MSG_BALANCE,
     SENDMSG_VALID_FLAGS,
+    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256,
+    SliceData,
 };
-use ton_types::{
-    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256, SliceData,
-};
-use ton_vm::executor::BehaviorModifiers;
-use ton_vm::{
+use ever_vm::executor::BehaviorModifiers;
+use ever_vm::{
     error::tvm_exception,
     executor::{gas::gas_state::Gas, IndexProvider},
     smart_contract_info::SmartContractInfo,
@@ -58,6 +57,7 @@ const RESULT_CODE_NOT_ENOUGH_GRAMS:              i32 = 37;
 const RESULT_CODE_NOT_ENOUGH_EXTRA:              i32 = 38;
 const RESULT_CODE_INVALID_BALANCE:               i32 = 40;
 const RESULT_CODE_BAD_ACCOUNT_STATE:             i32 = 41;
+const RESULT_CODE_NON_ZERO_CELL_LEVEL:           i32 = 42;
 const RESULT_CODE_ANYCAST:                       i32 = 50;
 const RESULT_CODE_NOT_FOUND_LICENSE:             i32 = 51;
 const RESULT_CODE_UNSUPPORTED:                   i32 = -1;
@@ -73,9 +73,6 @@ pub enum IncorrectCheckRewrite {
     Other
 }
 
-
-
-
 pub struct ExecuteParams {
     pub state_libs: HashmapE,
     pub block_unixtime: u32,
@@ -84,7 +81,7 @@ pub struct ExecuteParams {
     pub last_tr_lt: Arc<AtomicU64>,
     pub seed_block: UInt256,
     pub debug: bool,
-    pub trace_callback: Option<Arc<ton_vm::executor::TraceCallback>>,
+    pub trace_callback: Option<Arc<ever_vm::executor::TraceCallback>>,
     pub index_provider: Option<Arc<dyn IndexProvider>>,
     pub behavior_modifiers: Option<BehaviorModifiers>,
     pub block_version: u32,
@@ -160,7 +157,7 @@ pub trait TransactionExecutor {
         transaction.write_state_update(&HashUpdate::with_hashes(old_hash, new_hash))?;
         Ok(transaction)
     }
-
+/* 
     #[deprecated]
     fn build_contract_info(
         &self, 
@@ -184,12 +181,12 @@ pub trait TransactionExecutor {
         };
         smci.calc_rand_seed(seed_block, &acc_address.address().get_bytestring(0));
         smci
-    }
+    }*/
 
     fn ordinary_transaction(&self) -> bool;
     fn config(&self) -> &BlockchainConfig;
 
-    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Stack;
+    fn build_stack(&self, in_msg: Option<&Message>, account: &Account) -> Result<Stack>;
 
     /// Implementation of transaction's storage phase.
     /// If account does not exist - phase skipped.
@@ -247,10 +244,12 @@ pub trait TransactionExecutor {
             tr.add_fee_grams(&storage_fees_collected)?;
             fee.sub(&storage_fees_collected)?;
             let need_freeze = fee > Grams::from(self.config().get_gas_config(is_masterchain).freeze_due_limit);
-            let need_delete =
+            let need_delete = if self.config().has_capability(GlobalCapabilities::CapUndeletableAccounts) {
+                false 
+            } else {
                 (acc.status() == AccountStatus::AccStateUninit || acc.status() == AccountStatus::AccStateFrozen) &&
-                fee > Grams::from(self.config().get_gas_config(is_masterchain).delete_due_limit);
-
+                fee > Grams::from(self.config().get_gas_config(is_masterchain).delete_due_limit)
+            };
             if need_delete {
                 tr.total_fees_mut().add(acc_balance)?;
                 *acc = Account::default();
@@ -373,7 +372,7 @@ pub trait TransactionExecutor {
             if let Some(state_init) = msg.state_init() {
                 libs.push(state_init.libraries().inner());
             }
-            if let Some(reason) = compute_new_state(&mut result_acc, acc_balance, msg, init_code_hash, libs_disabled) {
+            if let Some(reason) = compute_new_state(&mut result_acc, acc_balance, msg, self.config())? {
                 if !init_code_hash {
                     *acc = result_acc;
                 }
@@ -500,7 +499,13 @@ pub trait TransactionExecutor {
         }
 
         let new_data = if let Ok(cell) = vm.get_committed_state().get_root().as_cell() {
-            Some(cell.clone())
+            if cell.level() > 0 {
+                log::trace!(target: "executor", "non-zero level in c4");
+                vm_phase.success = false;
+                None
+            } else {
+                Some(cell.clone())
+            }
         } else {
             log::debug!(target: "executor", "invalid contract, it must be cell in c4 register");
             vm_phase.success = false;
@@ -616,6 +621,17 @@ pub trait TransactionExecutor {
             return Ok(ActionPhaseResult::from_phase(phase));
         }
 
+        // The ChangeLibrary action can be created by VM in two ways:
+        // 1) by the SETLIBCODE and CHANGELIB insns,
+        // 2) manually by modifying the c5 register.
+        //
+        // In the case of CapSetLibCode is not set, (1) is denied by VM but (2) is still available.
+        // To deny (2) too, CapSetLibCode needs to be checked here in executor. However, since the
+        // executor's behavior gets modified, an additional capability must be checked beforehand.
+        let is_change_library_denied =
+            self.config().has_capability(GlobalCapabilities::CapTvmV19) &&
+            !self.config().has_capability(GlobalCapabilities::CapSetLibCode);
+
         for (i, action) in actions.iter_mut().enumerate() {
             log::debug!(target: "executor", "\nAction #{}\nType: {}\nInitial balance: {}",
                 i,
@@ -673,6 +689,8 @@ pub trait TransactionExecutor {
                         Some(code) => code
                     }
                 }
+                OutAction::ChangeLibrary { .. } if is_change_library_denied =>
+                    RESULT_CODE_UNKNOWN_OR_INVALID_ACTION,
                 OutAction::ChangeLibrary{ mode, code, hash} => {
                     match change_library_action_handler(&mut acc_copy, mode, code, hash) {
                         None => {
@@ -871,7 +889,7 @@ pub trait TransactionExecutor {
     fn copyleft_action_handler(
         &self,
         compute_phase_fees: &Grams,
-        mut phase: &mut TrActionPhase,
+        phase: &mut TrActionPhase,
         actions: &LinkedList<OutAction>,
     ) -> Result<Option<CopyleftReward>> {
         let mut copyleft_reward = Grams::zero();
@@ -943,20 +961,34 @@ fn compute_new_state(
     acc: &mut Account,
     acc_balance: &CurrencyCollection,
     in_msg: &Message,
-    init_code_hash: bool,
-    disable_set_lib: bool,
-) -> Option<ComputeSkipReason> {
+    config: &BlockchainConfig,
+) -> Result<Option<ComputeSkipReason>> {
     log::debug!(target: "executor", "compute_account_state");
+    let init_code_hash = config.has_capability(GlobalCapabilities::CapInitCodeHash);
+    let disable_set_lib = !config.has_capability(GlobalCapabilities::CapSetLibCode);
     match acc.status() {
         AccountStatus::AccStateNonexist => {
             log::error!(target: "executor", "account must exist");
-            Some(if in_msg.state_init().is_none() {ComputeSkipReason::NoState} else {ComputeSkipReason::BadState})
+            Ok(Some(if in_msg.state_init().is_none() {ComputeSkipReason::NoState} else {ComputeSkipReason::BadState}))
         }
         //Account exists, but can be in different states.
         AccountStatus::AccStateActive => {
+            if config.has_capability(GlobalCapabilities::CapSuspendedList) {
+                if let Some(suspended_addresses) = config.raw_config().suspended_addresses()? {
+                    let addr = acc.get_addr().ok_or_else(|| error!("active account must have address"))?;
+                    let wc = addr.workchain_id();
+                    let addr = UInt256::construct_from(&mut addr.address())?;
+
+                    if suspended_addresses.is_suspended(wc, addr)? {
+                        log::debug!(target: "executor", "account is suspended");
+                        return Ok(Some(ComputeSkipReason::Suspended));
+                    }
+                }
+            }
+
             //account is active, just return it
             log::debug!(target: "executor", "account state: AccountActive");
-            None
+            Ok(None)
         }
         AccountStatus::AccStateUninit => {
             log::debug!(target: "executor", "AccountUninit");
@@ -965,19 +997,19 @@ fn compute_new_state(
                 // borrow code and data from it and switch account state to 'active'.
                 log::debug!(target: "executor", "message for uninitialized: activated");
                 let text = "Cannot construct account from message with hash";
-                if !check_libraries(state_init, disable_set_lib, text, in_msg) {
-                    return Some(ComputeSkipReason::BadState);
+                if !check_state_init(state_init, disable_set_lib, text, in_msg) {
+                    return Ok(Some(ComputeSkipReason::BadState));
                 }
                 match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                     Err(err) => {
                         log::debug!(target: "executor", "reason: {}", err);
-                        Some(ComputeSkipReason::BadState)
+                        Ok(Some(ComputeSkipReason::BadState))
                     }
-                    Ok(_) => None
+                    Ok(_) => Ok(None)
                 }
             } else {
                 log::debug!(target: "executor", "message for uninitialized: skip computing phase");
-                Some(ComputeSkipReason::NoState)
+                Ok(Some(ComputeSkipReason::NoState))
             }
         }
         AccountStatus::AccStateFrozen => {
@@ -987,22 +1019,22 @@ fn compute_new_state(
             if !acc_balance.grams.is_zero() { // This check is redundant
                 if let Some(state_init) = in_msg.state_init() {
                     let text = "Cannot unfreeze account from message with hash";
-                    if !check_libraries(state_init, disable_set_lib, text, in_msg) {
-                        return Some(ComputeSkipReason::BadState);
+                    if !check_state_init(state_init, disable_set_lib, text, in_msg) {
+                        return Ok(Some(ComputeSkipReason::BadState));
                     }
                     log::debug!(target: "executor", "message for frozen: activated");
                     return match acc.try_activate_by_init_code_hash(state_init, init_code_hash) {
                         Err(err) => {
                             log::debug!(target: "executor", "reason: {}", err);
-                            Some(ComputeSkipReason::BadState)
+                            Ok(Some(ComputeSkipReason::BadState))
                         }
-                        Ok(_) => None
+                        Ok(_) => Ok(None)
                     }
                 }
             }
             //skip computing phase, because account is frozen (bad state)
             log::debug!(target: "executor", "account is frozen (bad state): skip computing phase");
-            Some(ComputeSkipReason::NoState)
+            Ok(Some(ComputeSkipReason::NoState))
         }
     }
 }
@@ -1429,6 +1461,9 @@ fn setcode_action_handler(acc: &mut Account, code: Cell) -> Option<i32> {
         acc.get_code().unwrap_or_default().repr_hash(),
         code.repr_hash(),
     );
+    if code.level() > 0 {
+        return Some(RESULT_CODE_NON_ZERO_CELL_LEVEL)
+    }
     match acc.set_code(code) {
         true => None,
         false => Some(RESULT_CODE_BAD_ACCOUNT_STATE)
@@ -1439,7 +1474,10 @@ fn change_library_action_handler(acc: &mut Account, mode: u8, code: Option<Cell>
     let result = match (code, hash) {
         (Some(code), None) => {
             log::debug!(target: "executor", "OutAction::ChangeLibrary mode: {}, code: {}", mode, code);
-            if mode == 0 { // TODO: Wrong codes. Look ton_block/out_actions::SET_LIB_CODE_REMOVE
+            if code.level() > 0 {
+                return Some(RESULT_CODE_NON_ZERO_CELL_LEVEL)
+            }
+            if mode == 0 { // TODO: Wrong codes. Look ever_block/out_actions::SET_LIB_CODE_REMOVE
                 acc.delete_library(&code.repr_hash())
             } else {
                 acc.set_library(code, (mode & 2) == 2)
@@ -1497,13 +1535,31 @@ fn init_gas(
     Gas::new(gas_limit as i64, gas_credit as i64, gas_max as i64, gas_info.get_real_gas_price() as i64)
 }
 
-fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Message) -> bool {
+fn check_state_init(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Message) -> bool {
+    if let Some(cell) = init.code() {
+        if cell.level() > 0 {
+            log::debug!(target: "executor", "non-zero level in stateinit code");
+            return false;
+        }
+    }
+    if let Some(cell) = init.data() {
+        if cell.level() > 0 {
+            log::debug!(target: "executor", "non-zero level in stateinit data");
+            return false;
+        }
+    }
+    if let Some(cell) = init.libraries().root() {
+        if cell.level() > 0 {
+            log::debug!(target: "executor", "non-zero level in stateinit libs");
+            return false;
+        }
+    }
     match init.libraries().len() {
         Ok(len) => {
             if !disable_set_lib || len == 0 {
                 true
             } else {
-                log::trace!(
+                log::debug!(
                     target: "executor",
                     "{} {:x} because libraries are disabled",
                         text, msg.hash().unwrap_or_default()
@@ -1512,7 +1568,7 @@ fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Me
             }
         }
         Err(err) => {
-            log::trace!(
+            log::debug!(
                 target: "executor",
                 "{} {:x} because libraries are broken {}",
                     text, msg.hash().unwrap_or_default(), err
@@ -1538,7 +1594,7 @@ fn account_from_message(
         if init.code().is_some() {
             if !check_address || (init.hash().ok()? == hdr.dst.address()) {
                 let text = "Cannot construct account from message with hash";
-                if check_libraries(init, disable_set_lib, text, msg) {
+                if check_state_init(init, disable_set_lib, text, msg) {
                     return Account::active_by_init_code_hash(
                         hdr.dst.clone(),
                         msg_remaining_balance.clone(),
