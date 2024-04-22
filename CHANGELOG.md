@@ -2,10 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-## Version 1.17.0
+## Version 1.17.4
 
 - Support Common Message
 - Support of common msg in executor
+
+## Version 1.17.0
+
+- the crate was renamed from `ton_executor` to `ever_executor`
+- supported renaming of other crates
+
+## Version 1.16.122
+
+- Do not delete frozen accounts (if related capability set)
+
+## Version 1.16.108
+
+- Deny non-zero cell level in code/data/lib
+
+## Version 1.16.106
+
+- Remove compiler warning
+- Remove unwraps that lead to panic
 
 ## Version 1.16.85
 

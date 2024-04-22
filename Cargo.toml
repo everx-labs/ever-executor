@@ -1,19 +1,18 @@
 [package]
 build = 'common/build/build.rs'
 edition = '2021'
-name = 'ton_executor'
-version = '1.17.0'
+name = 'ever_executor'
+version = '1.17.4'
 
 [dependencies]
 failure = '0.1.6'
 lazy_static = '1.4'
 log = '0.4'
-ton_block = { git = 'https://github.com/tonlabs/ever-block.git', tag = 'pre_feature-common-message' }
-ton_types = { git = 'https://github.com/tonlabs/ever-types.git', tag = 'pre_feature-common-message' }
-ton_vm = { git = 'https://github.com/tonlabs/ever-vm.git', tag = 'pre_feature-common-message' }
+ever_block = { git = 'https://github.com/everx-labs/ever-block.git', branch = 'feature-mesh' }
+ever_vm = { git = 'https://github.com/everx-labs/ever-vm.git', branch = 'feature-mesh' }
 
 [features]
-signature_with_id = [ 'ton_block/signature_with_id', 'ton_vm/signature_with_id' ]
+signature_with_id = [ 'ever_block/signature_with_id', 'ever_vm/signature_with_id' ]
 
 [patch.'https://github.com/tonlabs/ever-block.git']
 ton_block = { branch = 'feature-new-message', git = 'https://github.com/tonlabs/ever-block.git?branch=feature-new-message' }
@@ -26,5 +25,4 @@ name = 'benchmarks'
 bench = false
 
 [profile]
-
 
