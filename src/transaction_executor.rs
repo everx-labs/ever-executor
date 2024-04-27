@@ -37,7 +37,7 @@ use ever_block::{
     RESERVE_REVERSE, RESERVE_VALID_MODES, SENDMSG_ALL_BALANCE, SENDMSG_DELETE_IF_EMPTY,
     SENDMSG_IGNORE_ERROR, SENDMSG_PAY_FEE_SEPARATELY, SENDMSG_REMAINING_MSG_BALANCE,
     SENDMSG_VALID_FLAGS, SERDE_OPTS_COMMON_MESSAGE,
-    error, fail, AccountId, Cell, ExceptionCode, HashmapE, HashmapType, IBitstring, Result, UInt256,
+    error, fail, AccountId, Cell, ExceptionCode, HashmapE, IBitstring, Result, UInt256,
     SliceData,
 };
 use ever_vm::executor::BehaviorModifiers;
@@ -281,7 +281,9 @@ pub trait TransactionExecutor {
         msg_balance: &mut CurrencyCollection,
         acc_balance: &mut CurrencyCollection,
     ) -> Result<TrCreditPhase> {
-        let collected = if let Some(due_payment) = acc.due_payment() {
+        let collected = if self.config().has_capability(GlobalCapabilities::CapDuePaymentFix) {
+            None
+        } else if let Some(due_payment) = acc.due_payment() {
             let collected = *min(due_payment, &msg_balance.grams);
             msg_balance.grams.sub(&collected)?;
             let mut due_payment_remaining = *due_payment;
@@ -860,15 +862,16 @@ pub trait TransactionExecutor {
         let fwd_mine_fees = fwd_prices.mine_fee_checked(&fwd_full_fees)?;
         let fwd_fees = fwd_full_fees - fwd_mine_fees;
 
-        log::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees, remaining_msg_balance);
-
         if remaining_msg_balance.grams < fwd_full_fees + *compute_phase_fees {
             log::debug!(
-                target: "executor", "bounce phase - not enough grams {} to get fwd fee {}",
-                remaining_msg_balance, fwd_full_fees
+                target: "executor", "bounce phase - not enough value {} to get fwd and compute fee {}",
+                remaining_msg_balance, fwd_full_fees + *compute_phase_fees
             );
             return Ok((TrBouncePhase::no_funds(storage, fwd_full_fees), None))
         }
+
+        log::debug!(target: "executor", "get fee {} from bounce msg {}",
+            fwd_full_fees + *compute_phase_fees, remaining_msg_balance);
 
         acc_balance.sub(&remaining_msg_balance)?;
         remaining_msg_balance.grams.sub(&fwd_full_fees)?;
@@ -884,7 +887,7 @@ pub trait TransactionExecutor {
         log::debug!(
             target: "executor", 
             "bounce fees: {} bounce value: {}", 
-            fwd_mine_fees, bounce_msg.get_std()?.get_value().unwrap().grams
+            fwd_full_fees, bounce_msg.get_std()?.get_value().unwrap().grams
         );
         tr.add_fee_grams(&fwd_mine_fees)?;
         Ok((TrBouncePhase::ok(storage, fwd_mine_fees, fwd_fees), Some(bounce_msg)))

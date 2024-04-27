@@ -2,7 +2,7 @@
 build = 'common/build/build.rs'
 edition = '2021'
 name = 'ever_executor'
-version = '1.17.4'
+version = '1.17.7'
 
 [dependencies]
 failure = '0.1.6'
