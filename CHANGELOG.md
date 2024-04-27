@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.17.6
+
+- No due payments on credit phase and add payed dues to storage fee in TVM
+
 ## Version 1.17.0
 
 - the crate was renamed from `ton_executor` to `ever_executor`

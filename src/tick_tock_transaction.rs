@@ -11,12 +11,15 @@
 * limitations under the License.
 */
 
-use crate::{blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecutor, error::ExecutorError, ActionPhaseResult};
+use crate::{
+    blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecutor, error::ExecutorError,
+    ActionPhaseResult
+};
 
 use std::sync::atomic::Ordering;
 use ever_block::{
-    Account, CurrencyCollection, Grams, Message, TrComputePhase, Transaction, 
-    TransactionDescr, TransactionDescrTickTock, TransactionTickTock, Serializable
+    Account, CurrencyCollection, GlobalCapabilities, Grams, Message, Serializable, 
+    TrComputePhase, Transaction, TransactionDescr, TransactionDescrTickTock, TransactionTickTock
 };
 use ever_block::{error, fail, Result, HashmapType, SliceData};
 use ever_vm::{
@@ -75,30 +78,24 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         tr.set_now(params.block_unixtime);
         account.set_last_paid(0);
         let due_before_storage = account.due_payment().map_or(0, |due| due.as_u128());
-        let (storage, storage_fee) = match self.storage_phase(
+        let storage = self.storage_phase(
             account,
             &mut acc_balance,
             &mut tr,
             is_masterchain,
             is_special,
-        ) {
-            Ok(storage_ph) => {
-                let mut storage_fee = storage_ph.storage_fees_collected.as_u128();
-                if let Some(due) = &storage_ph.storage_fees_due {
-                    storage_fee += due.as_u128()
-                }
-                storage_fee -= due_before_storage;
-                (storage_ph, storage_fee)
-            },
-            Err(e) => fail!(
-                ExecutorError::TrExecutorError(
-                    format!(
-                        "cannot create storage phase of a new transaction for \
-                         smart contract for reason {}", e
-                    )
-                )
+        ).map_err(|e| error!(ExecutorError::TrExecutorError(
+            format!("cannot create storage phase of a new transaction for \
+                smart contract for reason {}", e
             )
-        };
+        )))?;
+        let mut storage_fee = storage.storage_fees_collected.as_u128();
+        if !self.config().has_capability(GlobalCapabilities::CapDuePaymentFix) {
+            if let Some(due) = &storage.storage_fees_due {
+                storage_fee += due.as_u128()
+            }
+            storage_fee -= due_before_storage;
+        }
         let mut description = TransactionDescrTickTock {
             tt: self.tt.clone(),
             storage,
