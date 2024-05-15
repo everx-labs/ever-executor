@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.17.7
+
+- Mesh and common message structures support
+
 ## Version 1.17.6
 
 - No due payments on credit phase and add payed dues to storage fee in TVM
