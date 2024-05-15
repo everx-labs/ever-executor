@@ -21,9 +21,10 @@ use std::sync::atomic::Ordering;
 #[cfg(feature = "timings")]
 use std::time::Instant;
 use ever_block::{
-    AccStatusChange, Account, AccountStatus, AddSub, CommonMsgInfo, Grams, Message,
+    AccStatusChange, Account, AccountStatus, AddSub, CommonMessage, CommonMsgInfo, Grams, Message,
     Serializable, TrBouncePhase, TrComputePhase, Transaction, TransactionDescr,
-    TransactionDescrOrdinary, MASTERCHAIN_ID, GlobalCapabilities
+    TransactionDescrOrdinary, MASTERCHAIN_ID, GlobalCapabilities, 
+    SERDE_OPTS_COMMON_MESSAGE, SERDE_OPTS_EMPTY
 };
 use ever_block::{error, fail, Result, HashmapType, SliceData};
 use ever_vm::{
@@ -59,7 +60,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
     /// Create end execute transaction from message for account
     fn execute_with_params(
         &self,
-        in_msg: Option<&Message>,
+        in_msg: Option<&CommonMessage>,
         account: &mut Account,
         params: ExecuteParams,
     ) -> Result<Transaction> {
@@ -69,21 +70,30 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let revert_anycast = 
             self.config.global_version() >= VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES;
 
-        let in_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
-        let in_msg_cell = in_msg.serialize()?; // TODO: get from outside
-        let is_masterchain = in_msg.dst_workchain_id() == Some(MASTERCHAIN_ID);
+        let in_common_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
+        let opts = if self.config().has_capability(GlobalCapabilities::CapCommonMessage) {
+            SERDE_OPTS_COMMON_MESSAGE
+        } else {
+            SERDE_OPTS_EMPTY
+        };
+        let in_msg_cell = in_common_msg.serialize_with_opts(opts)?; // TODO: get from outside
+        let in_std_msg = in_common_msg.get_std()?;
+        // Serialize cmn msg to cell in legacy format and put on TvmStack in legacy 
+        // format to support old smart contracts.
+        let in_std_msg_cell = in_std_msg.serialize()?;
+        let is_masterchain = in_std_msg.dst_workchain_id() == Some(MASTERCHAIN_ID);
         log::debug!(
             target: "executor", 
             "Ordinary transaction executing, in message id: {:x}", 
             in_msg_cell.repr_hash()
         );
-        let (bounce, is_ext_msg) = match in_msg.header() {
+        let (bounce, is_ext_msg) = match in_std_msg.header() {
             CommonMsgInfo::ExtOutMsgInfo(_) => fail!(ExecutorError::InvalidExtMessage),
             CommonMsgInfo::IntMsgInfo(ref hdr) => (hdr.bounce, false),
             CommonMsgInfo::ExtInMsgInfo(_) => (false, true)
         };
 
-        let account_address = in_msg.dst_ref().ok_or_else(|| ExecutorError::TrExecutorError(
+        let account_address = in_std_msg.dst_ref().ok_or_else(|| ExecutorError::TrExecutorError(
             format!("Input message {:x} has no dst address", in_msg_cell.repr_hash())
         ))?;
         let account_id = match account.get_id() {
@@ -98,10 +108,10 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         };
 
         let mut acc_balance = account.balance().cloned().unwrap_or_default();
-        let mut msg_balance = in_msg.get_value().cloned().unwrap_or_default();
+        let mut msg_balance = in_std_msg.get_value().cloned().unwrap_or_default();
         let ihr_delivered = false;  // ihr is disabled because it does not work
         if !ihr_delivered {
-            if let Some(h) = in_msg.int_header() {
+            if let Some(h) = in_std_msg.int_header() {
                 msg_balance.grams += h.ihr_fee;
             }
         }
@@ -111,12 +121,13 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         let is_special = self.config.is_special_account(account_address)?;
         let lt = std::cmp::max(
             account.last_tr_time().unwrap_or(0), 
-            std::cmp::max(params.last_tr_lt.load(Ordering::Relaxed), in_msg.lt().unwrap_or(0) + 1)
+            std::cmp::max(params.last_tr_lt.load(Ordering::Relaxed), in_std_msg.lt().unwrap_or(0) + 1)
         );
-        let mut tr = Transaction::with_address_and_status(account_id, account.status());
+        let mut tr = self.create_transaction(account_id);
+        tr.orig_status = account.status();
         tr.set_logical_time(lt);
         tr.set_now(params.block_unixtime);
-        tr.set_in_msg_cell(in_msg_cell.clone());
+        tr.write_in_msg(Some(in_common_msg))?;
 
         let mut description = TransactionDescrOrdinary {
             credit_first: !bounce,
@@ -227,12 +238,12 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         stack
             .push(int!(acc_balance.grams.as_u128()))
             .push(int!(msg_balance.grams.as_u128()))
-            .push(StackItem::Cell(in_msg_cell))
-            .push(StackItem::Slice(in_msg.body().unwrap_or_default()))
+            .push(StackItem::Cell(in_std_msg_cell))
+            .push(StackItem::Slice(in_std_msg.body().unwrap_or_default()))
             .push(boolean!(is_ext_msg));
         log::debug!(target: "executor", "compute_phase");
         let (compute_ph, actions, new_data) = match self.compute_phase(
-            Some(in_msg),
+            Some(in_std_msg),
             account,
             &mut acc_balance,
             &msg_balance,
@@ -340,7 +351,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     msg_balance.clone(),
                     &mut acc_balance, 
                     &compute_phase_gas_fees, 
-                    in_msg, 
+                    in_std_msg, 
                     &mut tr,
                     account_address,
                     params.block_version,
