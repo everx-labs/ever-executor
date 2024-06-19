@@ -11,22 +11,19 @@
 * limitations under the License.
 */
 
-use ever_block::types::ExceptionCode;
 use ever_block::ComputeSkipReason;
 use ever_vm::stack::StackItem;
 
-#[derive(Debug, failure::Fail, PartialEq)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ExecutorError {   
-    #[fail(display = "Invalid external message")]
+    #[error("Invalid external message")]
     InvalidExtMessage,
-    #[fail(display = "Transaction executor internal error: {}", 0)]
+    #[error("Transaction executor internal error: {0}")]
     TrExecutorError(String),
-    #[fail(display = "VM Exception, code: {}", 0)]
-    TvmExceptionCode(ExceptionCode),
-    #[fail(display = "Contract did not accept message, exit code: {}", 0)]
+    #[error("Contract did not accept message, exit code: {0}")]
     NoAcceptError(i32, Option<StackItem>),
-    #[fail(display = "Cannot pay for importing this external message")]
+    #[error("Cannot pay for importing this external message")]
     NoFundsToImportMsg,
-    #[fail(display = "Compute phase skipped while processing exteranl inbound messagewith reason {:?}", 0)]
+    #[error("Compute phase skipped while processing exteranl inbound messagewith reason {:?}", .0)]
     ExtMsgComputeSkipped(ComputeSkipReason)
 }
