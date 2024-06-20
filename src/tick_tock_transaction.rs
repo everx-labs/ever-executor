@@ -220,8 +220,8 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     fn ordinary_transaction(&self) -> bool { false }
     fn config(&self) -> &BlockchainConfig { &self.config }
     fn build_stack(&self, _in_msg: Option<&Message>, account: &Account) -> Result<Stack> {
-        let account_balance = account.balance().ok_or_else(|| failure::format_err!("Can't get account balance."))?.grams.as_u128();
-        let account_id = account.get_id().ok_or_else(|| failure::format_err!("Can't get account id."))?;
+        let account_balance = account.balance().ok_or_else(|| error!("Can't get account balance."))?.grams.as_u128();
+        let account_id = account.get_id().ok_or_else(|| error!("Can't get account id."))?;
         let mut stack = Stack::new();
         stack
             .push(int!(account_balance))

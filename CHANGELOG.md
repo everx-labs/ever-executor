@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.18.0
+
+- Use modern crates anyhow and thiserror instead of failure
+
 ## Version 1.17.7
 
 - Mesh and common message structures support
