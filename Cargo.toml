@@ -2,7 +2,7 @@
 build = 'common/build/build.rs'
 edition = '2021'
 name = 'ever_executor'
-version = '1.18.16'
+version = '1.18.17'
 
 [dependencies]
 anyhow = '1.0'
@@ -13,6 +13,7 @@ ever_block = { git = 'https://github.com/everx-labs/ever-block.git', tag = '1.11
 ever_vm = { git = 'https://github.com/everx-labs/ever-vm.git', tag = '2.2.16' }
 
 [features]
+gosh = [ 'ever_vm/gosh', 'ever_block/gosh' ]
 signature_with_id = [ 'ever_block/signature_with_id', 'ever_vm/signature_with_id' ]
 
 [[bench]]
