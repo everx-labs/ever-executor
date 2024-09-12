@@ -2,15 +2,15 @@
 build = 'common/build/build.rs'
 edition = '2021'
 name = 'ever_executor'
-version = '1.18.17'
+version = '1.18.18'
 
 [dependencies]
 anyhow = '1.0'
 lazy_static = '1.4'
 log = '0.4'
 thiserror = '1.0'
-ever_block = { git = 'https://github.com/everx-labs/ever-block.git', tag = '1.11.15' }
-ever_vm = { git = 'https://github.com/everx-labs/ever-vm.git', tag = '2.2.16' }
+ever_block = { git = 'https://github.com/everx-labs/ever-block.git', tag = '1.11.16' }
+ever_vm = { git = 'https://github.com/everx-labs/ever-vm.git', tag = '2.2.17' }
 
 [features]
 gosh = [ 'ever_vm/gosh', 'ever_block/gosh' ]
