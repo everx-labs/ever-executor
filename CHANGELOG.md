@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Version 1.18.29
+
+- Fix the build
+
 ## Version 1.18.17
 
 - Added gosh feature
