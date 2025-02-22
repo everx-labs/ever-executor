@@ -73,6 +73,18 @@ pub enum IncorrectCheckRewrite {
     Other
 }
 
+#[cfg(test)]
+#[path = "tests/test_tr_phases.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/test_transaction_executor_with_real_data.rs"]
+mod tests_with_real_data;
+
+#[cfg(test)]
+#[path = "tests/test_copyleft_instruction.rs"]
+mod tests_copyleft;
+
 pub struct ExecuteParams {
     pub state_libs: HashmapE,
     pub block_unixtime: u32,

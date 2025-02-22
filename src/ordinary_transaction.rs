@@ -32,6 +32,34 @@ use ever_vm::{
     stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
 };
 
+#[cfg(test)]
+#[path = "tests/test_ordinary_transaction.rs"]
+mod tests1;
+
+#[cfg(test)]
+#[path = "tests/test_ordinary_libs_and_code.rs"]
+mod tests2;
+
+#[cfg(test)]
+#[path = "tests/test_ordinary_freeze.rs"]
+mod tests3;
+
+#[cfg(test)]
+#[path = "tests/test_ordinary_rawreserve.rs"]
+mod tests4;
+
+#[cfg(test)]
+#[path = "tests/test_random_gen.rs"]
+mod tests5;
+
+#[cfg(test)]
+#[path = "tests/test_currency_collections.rs"]
+mod tests6;
+
+#[cfg(test)]
+#[path = "tests/test_bounced_action_phase.rs"]
+mod tests7;
+
 pub struct OrdinaryTransactionExecutor {
     config: BlockchainConfig,
 
