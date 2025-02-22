@@ -232,3 +232,6 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     }
 }
 
+#[cfg(test)]
+#[path = "tests/test_tick_tock_transaction.rs"]
+mod tests;
