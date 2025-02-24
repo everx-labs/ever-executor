@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Version 1.18.30
+## Version 1.18.31
 
 - Fix the build
 

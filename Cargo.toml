@@ -2,7 +2,7 @@
 build = 'common/build/build.rs'
 edition = '2021'
 name = 'ever_executor'
-version = '1.18.30'
+version = '1.18.31'
 
 [dependencies]
 anyhow = '1.0'
@@ -24,8 +24,11 @@ ever_assembler = { git = 'https://github.com/everx-labs/ever-assembler.git' }
 
 [features]
 ci_run = [  ]
+cross_check = [  ]
 gosh = [ 'ever_vm/gosh', 'ever_block/gosh' ]
+ihr_disabled = [  ]
 signature_with_id = [ 'ever_block/signature_with_id', 'ever_vm/signature_with_id' ]
+timings = [  ]
 
 [[bench]]
 harness = false
